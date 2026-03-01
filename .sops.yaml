@@ -1,0 +1,7 @@
+# SOPS configuration
+# Encrypts secrets with age key
+
+creation_rules:
+  # Match secret yaml files in service and provider directories
+  - path_regex: (backups|outline|kanbn|imagineering-pm-bot|radicale)/.*\.yaml$
+    age: age1l9w4fhntvqqfj7t3k0grpe8ret6l6fjf797mdhja8hlemj9xh58qgc0sgm

@@ -1,0 +1,17 @@
+# Allow all authenticated users to PROPFIND root for CalDAV/CardDAV discovery
+[root-discovery]
+user: .+
+collection:
+permissions: Rr
+
+# pm-agent has full access to nick's collections (shared calendar)
+[pm-agent-nick]
+user: pm-agent
+collection: nick(/.*)?
+permissions: RWrw
+
+# Everyone has full access to their own collections
+[owner]
+user: .+
+collection: {user}(/.*)?
+permissions: RWrw

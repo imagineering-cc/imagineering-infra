@@ -1,0 +1,50 @@
+#!/bin/bash
+# Pre-commit hook: prevent committing unencrypted secrets
+
+# Files that should be SOPS-encrypted if they exist
+SECRET_PATTERNS=(
+  "kanbn/*.yaml"
+  "outline/*.yaml"
+  "backups/*.yaml"
+  "imagineering-pm-bot/*.yaml"
+  "radicale/*.yaml"
+)
+
+# Exclude example files
+is_example() {
+  [[ "$1" == *.yaml.example ]]
+}
+
+# Check if file is SOPS-encrypted (has "sops:" key)
+is_encrypted() {
+  grep -q "^sops:" "$1" 2>/dev/null
+}
+
+errors=0
+
+for pattern in "${SECRET_PATTERNS[@]}"; do
+  for file in $pattern; do
+    # Skip if no matches or file doesn't exist
+    [[ ! -f "$file" ]] && continue
+
+    # Skip example files
+    is_example "$file" && continue
+
+    # Check if file is staged for commit
+    if git diff --cached --name-only | grep -q "^$file$"; then
+      if ! is_encrypted "$file"; then
+        echo "ERROR: $file is not SOPS-encrypted!"
+        echo "  Run: sops -e -i $file"
+        errors=$((errors + 1))
+      fi
+    fi
+  done
+done
+
+if [[ $errors -gt 0 ]]; then
+  echo ""
+  echo "Commit blocked: $errors unencrypted secret file(s) found."
+  exit 1
+fi
+
+exit 0

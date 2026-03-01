@@ -1,0 +1,15 @@
+services:
+  radicale:
+    image: tomsquest/docker-radicale:latest
+    container_name: radicale
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5232:5232"
+    volumes:
+      - radicale_data:/data
+      - ./config:/config:ro
+    environment:
+      - TAKE_FILE_OWNERSHIP=true
+
+volumes:
+  radicale_data:

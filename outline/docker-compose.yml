@@ -1,0 +1,102 @@
+services:
+  outline:
+    image: docker.getoutline.com/outlinewiki/outline:latest
+    container_name: outline
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    environment:
+      - NODE_ENV=production
+      - SECRET_KEY=${SECRET_KEY}
+      - UTILS_SECRET=${UTILS_SECRET}
+      - DATABASE_URL=postgres://outline:${POSTGRES_PASSWORD}@postgres:5432/outline?sslmode=disable
+      - PGSSLMODE=disable
+      - REDIS_URL=redis://redis:6379
+      - URL=${OUTLINE_URL}
+      - PORT=3000
+      - FILE_STORAGE=s3
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - AWS_REGION=us-east-1
+      - AWS_S3_UPLOAD_BUCKET_NAME=outline
+      - AWS_S3_UPLOAD_BUCKET_URL=${MINIO_URL}
+      - AWS_S3_FORCE_PATH_STYLE=true
+      - AWS_S3_ACL=private
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
+      - SMTP_SECURE=${SMTP_SECURE}
+      - FORCE_HTTPS=${FORCE_HTTPS:-true}
+      - ENABLE_UPDATES=false
+      - WEB_CONCURRENCY=1
+      - LOG_LEVEL=info
+    ports:
+      - "3002:3000"
+    networks:
+      - outline
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: outline_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=outline
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=outline
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - outline
+
+  redis:
+    image: redis:7-alpine
+    container_name: outline_redis
+    restart: unless-stopped
+    networks:
+      - outline
+
+  minio:
+    image: minio/minio
+    container_name: outline_minio
+    restart: unless-stopped
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+    networks:
+      - outline
+
+  # One-time setup to create the bucket
+  minio-setup:
+    image: minio/mc
+    container_name: outline_minio_setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb myminio/outline --ignore-existing;
+      mc anonymous set download myminio/outline;
+      exit 0;
+      "
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    networks:
+      - outline
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  outline:

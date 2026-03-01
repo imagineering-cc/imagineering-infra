@@ -1,0 +1,15 @@
+outline.imagineering.cc {
+    reverse_proxy localhost:3002
+}
+
+storage.imagineering.cc {
+    reverse_proxy localhost:9000
+}
+
+kan.imagineering.cc {
+    reverse_proxy localhost:3003
+}
+
+dav.imagineering.cc {
+    reverse_proxy localhost:5232
+}
