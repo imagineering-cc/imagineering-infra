@@ -249,43 +249,15 @@ NEXT_PUBLIC_STORAGE_URL=\(.next_public_storage_url)
 WEBHOOK_URL=\(.webhook_url)
 WEBHOOK_SECRET=\(.webhook_secret)"' > "$REPO_ROOT/kanbn/.env"
 
-    local KAN_SRC="$HOME/git/orgs/kanbn/kan"
-
-    # Check for source code
-    if [ ! -d "$KAN_SRC" ]; then
-        echo "ERROR: kan source not found at $KAN_SRC"
-        echo "Clone it with: git clone git@github.com:kanbn/kan.git $KAN_SRC"
-        return 1
-    fi
-
-    # Deploy .env and compose files (not source code)
+    # Deploy .env and compose files
     ssh "$REMOTE" "mkdir -p ~/apps/kanbn"
-    rsync -avz --delete --exclude 'secrets.yaml' --exclude 'kan-source' "$REPO_ROOT/kanbn/" "$REMOTE":~/apps/kanbn/
+    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/kanbn/" "$REMOTE":~/apps/kanbn/
 
     # Clean up local .env
     rm -f "$REPO_ROOT/kanbn/.env"
 
-    # Build Docker image locally for linux/amd64 (VPS is x86_64)
-    local IMAGE_TAR="/tmp/kanbn-image.tar"
-    echo "Building kanbn image locally for linux/amd64..."
-    docker buildx build \
-        --platform linux/amd64 \
-        --pull \
-        -t kanbn:local \
-        -f "$KAN_SRC/apps/web/Dockerfile" \
-        "$KAN_SRC" \
-        --output "type=docker,dest=$IMAGE_TAR"
-
-    # Transfer image to VPS
-    echo "Transferring image to VPS..."
-    rsync -az --progress "$IMAGE_TAR" "$REMOTE":/tmp/kanbn-image.tar
-
-    # Load image and restart container
-    echo "Loading image and restarting container..."
-    ssh "$REMOTE" "docker load < /tmp/kanbn-image.tar && rm /tmp/kanbn-image.tar && cd ~/apps/kanbn && docker compose up -d"
-
-    # Clean up local tar
-    rm -f "$IMAGE_TAR"
+    # Pull image from ghcr.io and start
+    ssh "$REMOTE" "cd ~/apps/kanbn && docker compose pull && docker compose up -d"
 
     echo "Kan.bn deployed!"
     echo "  URL: https://kan.imagineering.cc"
