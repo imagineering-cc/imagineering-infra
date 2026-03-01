@@ -28,16 +28,20 @@ deploy_scripts() {
     rsync -avz "$REPO_ROOT/scripts/" "$REMOTE":/tmp/scripts/
     ssh "$REMOTE" "sudo mv /tmp/scripts/* /opt/scripts/ && sudo chmod +x /opt/scripts/*.sh"
 
-    # Set up health check cron
-    local PM_BOT_SECRETS="$REPO_ROOT/imagineering-pm-bot/secrets.yaml"
-    if [ -f "$PM_BOT_SECRETS" ]; then
+    # Set up health check cron (uses Telegram for server alerts)
+    # Requires TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID in backups/secrets.yaml
+    local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
+    if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
         echo "Setting up health check cron..."
-        local BOT_TOKEN
-        BOT_TOKEN=$(sops -d "$PM_BOT_SECRETS" | yq -r '.telegram_bot_token')
-        ssh "$REMOTE" "mkdir -p ~/logs && echo '0 * * * * nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=PLACEHOLDER_CHAT_ID TELEGRAM_THREAD_ID=PLACEHOLDER_THREAD_ID /opt/scripts/health-check.sh >> /home/nick/logs/health-check.log 2>&1' | sudo tee /etc/cron.d/health-check > /dev/null"
+        local BOT_TOKEN CHAT_ID THREAD_ID
+        BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
+        CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
+        THREAD_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_thread_id')
+        ssh "$REMOTE" "mkdir -p ~/logs && echo '0 * * * * nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=$CHAT_ID TELEGRAM_THREAD_ID=$THREAD_ID /opt/scripts/health-check.sh >> /home/nick/logs/health-check.log 2>&1' | sudo tee /etc/cron.d/health-check > /dev/null"
         echo "Health check cron installed (hourly)"
     else
-        echo "WARNING: imagineering-pm-bot/secrets.yaml not found, skipping health check cron"
+        echo "NOTE: No Telegram credentials in backups/secrets.yaml, skipping health check cron"
+        echo "  Add telegram_bot_token, telegram_chat_id, telegram_thread_id to enable alerts"
     fi
 
     echo "Scripts deployed to /opt/scripts/"
@@ -265,7 +269,7 @@ WEBHOOK_SECRET=\(.webhook_secret)"' > "$REPO_ROOT/kanbn/.env"
 }
 
 deploy_pm_bot() {
-    echo "Deploying imagineering-pm-bot (Telegram)..."
+    echo "Deploying Dreamfinder (Signal PM bot)..."
 
     local PM_BOT_SECRETS="$REPO_ROOT/imagineering-pm-bot/secrets.yaml"
     local PM_BOT_SRC="$HOME/git/orgs/imagineering/imagineering-pm-bot"
@@ -285,18 +289,19 @@ deploy_pm_bot() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$PM_BOT_SECRETS" | yq -r '"# imagineering-pm-bot Configuration (auto-generated from secrets.yaml)
-TELEGRAM_BOT_TOKEN=\(.telegram_bot_token)
-KAN_API_KEY=\(.kan_api_key)
-CLAUDE_REFRESH_TOKEN=\(.claude_refresh_token)
+    sops -d "$PM_BOT_SECRETS" | yq -r '"# Dreamfinder Configuration (auto-generated from secrets.yaml)
+ANTHROPIC_API_KEY=\(.anthropic_api_key)
+SIGNAL_PHONE_NUMBER=\(.signal_phone_number)
 KAN_BASE_URL=\(.kan_base_url)
-OUTLINE_API_KEY=\(.outline_api_key)
+KAN_API_KEY=\(.kan_api_key)
 OUTLINE_BASE_URL=\(.outline_base_url)
+OUTLINE_API_KEY=\(.outline_api_key)
+RADICALE_BASE_URL=\(.radicale_base_url)
+RADICALE_USERNAME=\(.radicale_username)
 RADICALE_PASSWORD=\(.radicale_password)
-SPRINT_START_DATE=\(.sprint_start_date)
-REMINDER_INTERVAL_HOURS=\(.reminder_interval_hours)
-ADMIN_USER_IDS=\(.admin_user_ids)
-PLAYWRIGHT_ENABLED=\(.playwright_enabled)"' > "$REPO_ROOT/imagineering-pm-bot/.env"
+PLAYWRIGHT_ENABLED=\(.playwright_enabled)
+BOT_NAME=\(.bot_name)
+LOG_LEVEL=\(.log_level)"' > "$REPO_ROOT/imagineering-pm-bot/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/imagineering-pm-bot/src"
@@ -304,16 +309,16 @@ PLAYWRIGHT_ENABLED=\(.playwright_enabled)"' > "$REPO_ROOT/imagineering-pm-bot/.e
     # Copy docker compose and .env
     rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/imagineering-pm-bot/" "$REMOTE":~/apps/imagineering-pm-bot/
 
-    # Copy source code
-    rsync -avz --delete --exclude 'node_modules' --exclude 'dist' --exclude '.env' --exclude 'data' "$PM_BOT_SRC/" "$REMOTE":~/apps/imagineering-pm-bot/src/
+    # Copy source code (Dart project)
+    rsync -avz --delete --exclude '.dart_tool' --exclude '.packages' --exclude 'data' --exclude '.env' "$PM_BOT_SRC/" "$REMOTE":~/apps/imagineering-pm-bot/src/
 
     # Clean up local .env
     rm -f "$REPO_ROOT/imagineering-pm-bot/.env"
 
-    # Build and start
+    # Build and start (bot + signal-cli-rest-api)
     ssh "$REMOTE" "cd ~/apps/imagineering-pm-bot && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
 
-    echo "imagineering-pm-bot deployed!"
+    echo "Dreamfinder deployed!"
     echo "  Check logs: ssh $REMOTE 'docker logs -f imagineering-pm-bot'"
 }
 
@@ -376,7 +381,7 @@ case $SERVICE in
     radicale|dav)
         deploy_radicale
         ;;
-    imagineering-pm-bot|pm-bot|telegram)
+    imagineering-pm-bot|pm-bot|dreamfinder|signal)
         deploy_pm_bot
         ;;
     *)

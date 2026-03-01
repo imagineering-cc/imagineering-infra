@@ -24,7 +24,7 @@ The GCE instance has moderate resources (4GB RAM, 2 vCPU) but running many `dock
 ├── outline/            # Team wiki (Notion alternative)
 ├── radicale/           # CalDAV/CardDAV server
 ├── scripts/            # Deployment & backup scripts
-├── imagineering-pm-bot/  # Telegram bot for Kan.bn
+├── imagineering-pm-bot/  # Signal PM bot (Dreamfinder)
 └── .sops.yaml          # SOPS encryption config
 ```
 
@@ -45,7 +45,7 @@ The GCE instance has moderate resources (4GB RAM, 2 vCPU) but running many `dock
 |---------|------|-----|-------------|
 | Caddy | 80/443 | - | Reverse proxy, auto-TLS |
 | Kan.bn | 3003 | kan.imagineering.cc | Kanban boards (Trello-like) |
-| imagineering-pm-bot | - | Telegram | AI task assistant for Kan.bn |
+| Dreamfinder (pm-bot) | - | Signal | AI project management bot |
 | Outline | 3002 | outline.imagineering.cc | Team wiki (Notion-like) |
 | MinIO | 9000 | storage.imagineering.cc | S3-compatible file storage |
 | Radicale | 5232 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
@@ -92,9 +92,9 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 ┌─────────────────────────────────────────────────────────────────────┐
 │                 imagineering-pm-bot (standalone)                    │
 │                                                                    │
-│  ┌──────────┐    HTTP API     ┌──────────┐    Telegram    ┌──────┐│
+│  ┌──────────┐    HTTP API     ┌──────────┐   Signal API   ┌──────┐│
 │  │  SQLite  │◄───────────────►│  Bot     │◄──────────────►│Users ││
-│  │ (local)  │                 │ (Node.js)│    Polling     │      ││
+│  │ (local)  │                 │  (Dart)  │  signal-cli    │      ││
 │  └──────────┘                 └────┬─────┘                └──────┘│
 │                                    │                               │
 │                                    ▼                               │
@@ -107,7 +107,7 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 - `outline/` - own network with postgres, redis, minio
 - `kanbn/` - own network with postgres; uses shared MinIO via `storage.imagineering.cc`
 - `radicale/` - standalone container; file-based storage in Docker volume
-- `imagineering-pm-bot/` - no docker network; talks to Kan.bn via public API, Telegram via polling
+- `imagineering-pm-bot/` - own network with signal-cli-rest-api; talks to Kan.bn via public API
 - `caddy/` - `network_mode: host` to bind 80/443 directly
 
 **Shared resources:**
@@ -298,34 +298,37 @@ Use base URL `https://dav.imagineering.cc` with your username/password in:
 
 ---
 
-# imagineering-pm-bot
+# imagineering-pm-bot (Dreamfinder)
 
-Telegram bot for Kan.bn task management. Uses Claude AI for natural language interaction.
+Signal-based AI project management bot. Uses Claude Sonnet with ~75 MCP tools
+across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural language only.
 
 **Source**: [imagineering-cc/imagineering-pm-bot](https://github.com/imagineering-cc/imagineering-pm-bot)
 
-## Features
+## Architecture
 
-- Task reminders via Telegram
-- Sprint tracking
-- AI-powered task assistance (Claude)
+- **Dart** application with Claude agent loop
+- **Signal** messaging via `signal-cli-rest-api` sidecar container
+- **SQLite** for conversation history and bot state
+- **MCP** tools for Kan.bn, Outline, Radicale, Playwright
 
 ## Config
 
 | Variable | Description |
 |----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
-| `KAN_BASE_URL` | Kan.bn URL (default: kan.imagineering.cc) |
-| `KAN_SERVICE_API_KEY` | API key for Kan.bn |
 | `ANTHROPIC_API_KEY` | Claude API key |
-| `SPRINT_START_DATE` | Sprint start date |
-| `REMINDER_INTERVAL_HOURS` | Reminder frequency |
+| `SIGNAL_PHONE_NUMBER` | Bot's registered Signal phone number |
+| `KAN_BASE_URL` | Kan.bn API URL |
+| `KAN_API_KEY` | Kan.bn API key |
+| `OUTLINE_BASE_URL` | Outline API URL |
+| `OUTLINE_API_KEY` | Outline API key |
+| `RADICALE_BASE_URL` | Radicale CalDAV URL |
 
 ## Setup
 
 ```bash
 # Deploy (source from https://github.com/imagineering-cc/imagineering-pm-bot)
-./scripts/deploy-to.sh 34.40.229.206 imagineering-pm-bot
+./scripts/deploy-to.sh 34.40.229.206 pm-bot
 
 # Check logs
 ssh 34.40.229.206 'docker logs -f imagineering-pm-bot'

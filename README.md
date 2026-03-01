@@ -57,7 +57,7 @@ age-keygen -o ~/.config/sops/age/keys.txt
 ├── kanbn/                  # Kan.bn (Trello alternative)
 ├── outline/                # Outline wiki
 ├── radicale/               # CalDAV/CardDAV server
-├── imagineering-pm-bot/    # Telegram bot for Kan.bn
+├── imagineering-pm-bot/    # Signal PM bot (Dreamfinder)
 ├── backups/                # Backup configuration
 ├── scripts/
 │   ├── deploy-to.sh        # Deployment script
