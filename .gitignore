@@ -5,8 +5,11 @@
 .idea/
 .vscode/
 
-# Terraform provider cache (large, reproducible via .terraform.lock.hcl)
+# Terraform
 **/.terraform/
+**/terraform.tfvars
+**/terraform.tfstate
+**/terraform.tfstate.backup
 
 # Generated .env files (created from secrets.yaml during deploy)
 **/.env

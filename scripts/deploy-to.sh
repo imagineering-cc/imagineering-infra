@@ -18,7 +18,7 @@ fi
 IP=$1
 SERVICE=${2:-all}
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REMOTE="ubuntu@$IP"
+REMOTE="nick@$IP"
 
 echo "Deploying to $REMOTE..."
 
@@ -34,7 +34,7 @@ deploy_scripts() {
         echo "Setting up health check cron..."
         local BOT_TOKEN
         BOT_TOKEN=$(sops -d "$PM_BOT_SECRETS" | yq -r '.telegram_bot_token')
-        ssh "$REMOTE" "mkdir -p ~/logs && echo '0 * * * * ubuntu TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=PLACEHOLDER_CHAT_ID TELEGRAM_THREAD_ID=PLACEHOLDER_THREAD_ID /opt/scripts/health-check.sh >> /home/ubuntu/logs/health-check.log 2>&1' | sudo tee /etc/cron.d/health-check > /dev/null"
+        ssh "$REMOTE" "mkdir -p ~/logs && echo '0 * * * * nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=PLACEHOLDER_CHAT_ID TELEGRAM_THREAD_ID=PLACEHOLDER_THREAD_ID /opt/scripts/health-check.sh >> /home/nick/logs/health-check.log 2>&1' | sudo tee /etc/cron.d/health-check > /dev/null"
         echo "Health check cron installed (hourly)"
     else
         echo "WARNING: imagineering-pm-bot/secrets.yaml not found, skipping health check cron"
@@ -100,7 +100,7 @@ EOF
     scp "$REPO_ROOT/scripts/restore.sh" "$REMOTE":/tmp/restore.sh
     ssh "$REMOTE" "sudo mv /tmp/backup.sh /tmp/restore.sh /opt/scripts/"
     ssh "$REMOTE" "sudo chmod +x /opt/scripts/backup.sh /opt/scripts/restore.sh"
-    ssh "$REMOTE" "sudo chown ubuntu:ubuntu /opt/scripts/*.sh"
+    ssh "$REMOTE" "sudo chown nick:nick /opt/scripts/*.sh"
 
     # Test rclone connection
     echo "Testing rclone connection..."
@@ -119,7 +119,7 @@ EOF
     # Set up backup cron job and log directory
     echo "Setting up backup cron job..."
     ssh "$REMOTE" "mkdir -p ~/logs"
-    ssh "$REMOTE" "echo '0 4 * * * ubuntu /opt/scripts/backup.sh all >> /home/ubuntu/logs/backup.log 2>&1' | sudo tee /etc/cron.d/backup > /dev/null"
+    ssh "$REMOTE" "echo '0 4 * * * nick /opt/scripts/backup.sh all >> /home/nick/logs/backup.log 2>&1' | sudo tee /etc/cron.d/backup > /dev/null"
 
     # --- GitHub backup setup ---
     echo ""
