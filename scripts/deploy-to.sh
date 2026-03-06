@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, outline, kanbn, radicale, backups, scripts
+# Services: all, caddy, outline, kanbn, radicale, matrix, backups, scripts
 
 set -e
 
@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|outline|kanbn|radicale|backups|scripts (default: all)"
+  echo "  service: all|caddy|outline|kanbn|radicale|matrix|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -353,6 +353,61 @@ deploy_radicale() {
     echo "  Test: curl -u user:pass https://dav.imagineering.cc/.well-known/caldav"
 }
 
+deploy_matrix() {
+    echo "Deploying Matrix (Continuwuity + bridges + relay bot)..."
+
+    local MATRIX_SECRETS="$REPO_ROOT/matrix/secrets.yaml"
+    local MATRIX_SRC="$HOME/git/orgs/imagineering/matrix"
+
+    # Check for secrets file
+    if [ ! -f "$MATRIX_SECRETS" ]; then
+        echo "ERROR: matrix/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i matrix/secrets.yaml"
+        return 1
+    fi
+
+    # Check for matrix repo (needed for relay bot source)
+    if [ ! -d "$MATRIX_SRC/relay" ]; then
+        echo "ERROR: matrix repo not found at $MATRIX_SRC (need relay/ source)"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$MATRIX_SECRETS" | yq -r '"# Matrix Configuration (auto-generated from secrets.yaml)
+MATRIX_SERVER_NAME=\(.matrix_server_name)
+REGISTRATION_TOKEN=\(.registration_token)
+RELAY_AS_TOKEN=\(.relay_as_token)
+RELAY_HS_TOKEN=\(.relay_hs_token)
+PORTAL_ROOMS=\(.portal_rooms)
+HUB_ROOM_ID=\(.hub_room_id)
+RELAY_DOUBLE_PUPPETS=\(.relay_double_puppets)
+RELAY_LOG_LEVEL=\(.relay_log_level)"' > "$REPO_ROOT/matrix/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/matrix"
+    rsync -avz --delete --exclude 'secrets.yaml' --exclude 'secrets.yaml.example' "$REPO_ROOT/matrix/" "$REMOTE":~/apps/matrix/
+
+    # Copy relay bot source from matrix repo
+    rsync -avz --delete \
+        --exclude '__pycache__' \
+        --exclude '.pytest_cache' \
+        --exclude 'tests' \
+        --exclude '*.pyc' \
+        "$MATRIX_SRC/relay/" "$REMOTE":~/apps/matrix/relay/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/matrix/.env"
+
+    # Build relay bot and start all services
+    ssh "$REMOTE" "cd ~/apps/matrix && docker compose pull && DOCKER_BUILDKIT=1 docker compose build relay-bot && docker compose up -d"
+
+    echo "Matrix deployed!"
+    echo "  URL: https://matrix.imagineering.cc"
+    echo "  Verify: curl https://matrix.imagineering.cc/_matrix/client/versions"
+    echo "  Logs: ssh $REMOTE 'cd ~/apps/matrix && docker compose logs --tail 20'"
+}
+
 case $SERVICE in
     all)
         deploy_scripts
@@ -362,6 +417,7 @@ case $SERVICE in
         deploy_kanbn
         deploy_radicale
         deploy_pm_bot
+        deploy_matrix
         ;;
     scripts)
         deploy_scripts
@@ -384,9 +440,12 @@ case $SERVICE in
     imagineering-pm-bot|pm-bot|dreamfinder|signal)
         deploy_pm_bot
         ;;
+    matrix)
+        deploy_matrix
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|imagineering-pm-bot|backups|scripts]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|imagineering-pm-bot|matrix|backups|scripts]"
         exit 1
         ;;
 esac

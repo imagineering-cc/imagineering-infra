@@ -13,3 +13,7 @@ kan.imagineering.cc {
 dav.imagineering.cc {
     reverse_proxy localhost:5232
 }
+
+matrix.imagineering.cc {
+    reverse_proxy localhost:8008
+}

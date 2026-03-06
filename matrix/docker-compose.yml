@@ -1,0 +1,81 @@
+services:
+  continuwuity:
+    image: forgejo.ellis.link/continuwuation/continuwuity:latest
+    restart: always
+    ports:
+      - "8008:6167"   # Client API
+    environment:
+      CONTINUWUITY_SERVER_NAME: ${MATRIX_SERVER_NAME}
+      CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
+      CONTINUWUITY_PORT: "6167"
+      CONTINUWUITY_ADDRESS: "0.0.0.0"
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+      CONTINUWUITY_REGISTRATION_TOKEN: ${REGISTRATION_TOKEN}
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+      CONTINUWUITY_MAX_REQUEST_SIZE: "20971520"
+      CONTINUWUITY_NEW_USER_DISPLAYNAME_SUFFIX: ""
+      CONTINUWUITY_LOG: "info"
+    volumes:
+      - continuwuity_data:/var/lib/continuwuity
+    ulimits:
+      nofile:
+        soft: 1048567
+        hard: 1048567
+
+  mautrix-telegram:
+    image: dock.mau.dev/mautrix/telegram:latest
+    restart: always
+    volumes:
+      - telegram_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-discord:
+    image: dock.mau.dev/mautrix/discord:latest
+    restart: always
+    volumes:
+      - discord_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-signal:
+    image: dock.mau.dev/mautrix/signal:latest
+    restart: always
+    volumes:
+      - signal_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    restart: always
+    volumes:
+      - whatsapp_data:/data
+    depends_on:
+      - continuwuity
+
+  relay-bot:
+    build: ./relay
+    restart: always
+    environment:
+      RELAY_HOMESERVER_URL: http://continuwuity:6167
+      RELAY_DOMAIN: ${MATRIX_SERVER_NAME}
+      RELAY_AS_TOKEN: ${RELAY_AS_TOKEN}
+      RELAY_HS_TOKEN: ${RELAY_HS_TOKEN}
+      RELAY_PORTAL_ROOMS: ${PORTAL_ROOMS:-}
+      RELAY_HUB_ROOM_ID: ${HUB_ROOM_ID}
+      RELAY_DB_PATH: /data/relay.db
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-INFO}
+      RELAY_DOUBLE_PUPPETS: ${RELAY_DOUBLE_PUPPETS:-}
+    volumes:
+      - relay_data:/data
+    depends_on:
+      - continuwuity
+
+volumes:
+  continuwuity_data:
+  telegram_data:
+  discord_data:
+  signal_data:
+  whatsapp_data:
+  relay_data:
