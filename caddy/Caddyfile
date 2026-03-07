@@ -15,5 +15,15 @@ dav.imagineering.cc {
 }
 
 matrix.imagineering.cc {
-    reverse_proxy localhost:8008
+    handle /mautrix-discord/* {
+        reverse_proxy localhost:29334
+    }
+    handle {
+        reverse_proxy localhost:8008
+    }
+}
+
+imagineering.cc {
+    root * /srv/site
+    file_server
 }
