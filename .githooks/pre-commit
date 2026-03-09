@@ -6,7 +6,7 @@ SECRET_PATTERNS=(
   "kanbn/*.yaml"
   "outline/*.yaml"
   "backups/*.yaml"
-  "imagineering-pm-bot/*.yaml"
+  "dreamfinder/*.yaml"
   "radicale/*.yaml"
 )
 

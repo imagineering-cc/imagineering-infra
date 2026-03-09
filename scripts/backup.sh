@@ -47,17 +47,17 @@ backup_kanbn() {
 }
 
 backup_pm_bot() {
-  log "Backing up imagineering-pm-bot..."
+  log "Backing up Dreamfinder..."
 
   local backup_file="$BACKUP_DIR/pm-bot-$DATE.db"
 
   # Copy SQLite database from container volume
-  docker cp imagineering-pm-bot:/app/data/kan-bot.db "$backup_file"
+  docker cp dreamfinder:/app/data/kan-bot.db "$backup_file"
 
   # Upload to object storage
   rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/pm-bot/"
 
-  log "imagineering-pm-bot backup complete: pm-bot-$DATE.db"
+  log "Dreamfinder backup complete: pm-bot-$DATE.db"
 }
 
 backup_outline() {

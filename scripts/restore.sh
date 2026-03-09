@@ -134,7 +134,7 @@ restore_outline() {
 }
 
 restore_pm_bot() {
-  log "Restoring imagineering-pm-bot..."
+  log "Restoring Dreamfinder..."
 
   # Find backup file
   if [ -n "$DATE" ]; then
@@ -157,16 +157,16 @@ restore_pm_bot() {
 
   # Copy SQLite database into container volume
   log "Restoring database..."
-  docker cp "$RESTORE_DIR/$BACKUP_FILE" imagineering-pm-bot:/app/data/kan-bot.db
+  docker cp "$RESTORE_DIR/$BACKUP_FILE" dreamfinder:/app/data/kan-bot.db
 
-  log "Restarting imagineering-pm-bot..."
-  cd ~/apps/imagineering-pm-bot
+  log "Restarting Dreamfinder..."
+  cd ~/apps/dreamfinder
   docker compose restart
 
   # Cleanup
   rm -f "$RESTORE_DIR/$BACKUP_FILE"
 
-  log "imagineering-pm-bot restore complete!"
+  log "Dreamfinder restore complete!"
 }
 
 restore_radicale() {
