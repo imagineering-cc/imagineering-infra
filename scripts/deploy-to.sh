@@ -271,19 +271,19 @@ WEBHOOK_SECRET=\(.webhook_secret)"' > "$REPO_ROOT/kanbn/.env"
 deploy_pm_bot() {
     echo "Deploying Dreamfinder (Signal PM bot)..."
 
-    local PM_BOT_SECRETS="$REPO_ROOT/imagineering-pm-bot/secrets.yaml"
-    local PM_BOT_SRC="$HOME/git/orgs/imagineering/imagineering-pm-bot"
+    local PM_BOT_SECRETS="$REPO_ROOT/dreamfinder/secrets.yaml"
+    local PM_BOT_SRC="$HOME/git/orgs/imagineering/dreamfinder"
 
     # Check for secrets file
     if [ ! -f "$PM_BOT_SECRETS" ]; then
-        echo "ERROR: imagineering-pm-bot/secrets.yaml not found"
-        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i imagineering-pm-bot/secrets.yaml"
+        echo "ERROR: dreamfinder/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i dreamfinder/secrets.yaml"
         return 1
     fi
 
     # Check for source code
     if [ ! -d "$PM_BOT_SRC" ]; then
-        echo "ERROR: imagineering-pm-bot source not found at $PM_BOT_SRC"
+        echo "ERROR: dreamfinder source not found at $PM_BOT_SRC"
         return 1
     fi
 
@@ -301,25 +301,25 @@ RADICALE_USERNAME=\(.radicale_username)
 RADICALE_PASSWORD=\(.radicale_password)
 PLAYWRIGHT_ENABLED=\(.playwright_enabled)
 BOT_NAME=\(.bot_name)
-LOG_LEVEL=\(.log_level)"' > "$REPO_ROOT/imagineering-pm-bot/.env"
+LOG_LEVEL=\(.log_level)"' > "$REPO_ROOT/dreamfinder/.env"
 
     # Deploy files
-    ssh "$REMOTE" "mkdir -p ~/apps/imagineering-pm-bot/src"
+    ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder/src"
 
     # Copy docker compose and .env
-    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/imagineering-pm-bot/" "$REMOTE":~/apps/imagineering-pm-bot/
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/dreamfinder/" "$REMOTE":~/apps/dreamfinder/
 
     # Copy source code (Dart project)
-    rsync -avz --delete --exclude '.dart_tool' --exclude '.packages' --exclude 'data' --exclude '.env' "$PM_BOT_SRC/" "$REMOTE":~/apps/imagineering-pm-bot/src/
+    rsync -avz --delete --exclude '.dart_tool' --exclude '.packages' --exclude 'data' --exclude '.env' "$PM_BOT_SRC/" "$REMOTE":~/apps/dreamfinder/src/
 
     # Clean up local .env
-    rm -f "$REPO_ROOT/imagineering-pm-bot/.env"
+    rm -f "$REPO_ROOT/dreamfinder/.env"
 
     # Build and start (bot + signal-cli-rest-api)
-    ssh "$REMOTE" "cd ~/apps/imagineering-pm-bot && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+    ssh "$REMOTE" "cd ~/apps/dreamfinder && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
 
     echo "Dreamfinder deployed!"
-    echo "  Check logs: ssh $REMOTE 'docker logs -f imagineering-pm-bot'"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f dreamfinder'"
 }
 
 deploy_radicale() {
@@ -437,7 +437,7 @@ case $SERVICE in
     radicale|dav)
         deploy_radicale
         ;;
-    imagineering-pm-bot|pm-bot|dreamfinder|signal)
+    dreamfinder|pm-bot|signal)
         deploy_pm_bot
         ;;
     matrix)
@@ -445,7 +445,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|imagineering-pm-bot|matrix|backups|scripts]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|backups|scripts]"
         exit 1
         ;;
 esac

@@ -24,7 +24,7 @@ The GCE instance has moderate resources (4GB RAM, 2 vCPU) but running many `dock
 ├── outline/            # Team wiki (Notion alternative)
 ├── radicale/           # CalDAV/CardDAV server
 ├── scripts/            # Deployment & backup scripts
-├── imagineering-pm-bot/  # Signal PM bot (Dreamfinder)
+├── dreamfinder/  # Signal PM bot (Dreamfinder)
 └── .sops.yaml          # SOPS encryption config
 ```
 
@@ -90,7 +90,7 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│                 imagineering-pm-bot (standalone)                    │
+│                 dreamfinder (standalone)                    │
 │                                                                    │
 │  ┌──────────┐    HTTP API     ┌──────────┐   Signal API   ┌──────┐│
 │  │  SQLite  │◄───────────────►│  Bot     │◄──────────────►│Users ││
@@ -107,7 +107,7 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 - `outline/` - own network with postgres, redis, minio
 - `kanbn/` - own network with postgres; uses shared MinIO via `storage.imagineering.cc`
 - `radicale/` - standalone container; file-based storage in Docker volume
-- `imagineering-pm-bot/` - own network with signal-cli-rest-api; talks to Kan.bn via public API
+- `dreamfinder/` - own network with signal-cli-rest-api; talks to Kan.bn via public API
 - `caddy/` - `network_mode: host` to bind 80/443 directly
 
 **Shared resources:**
@@ -123,7 +123,7 @@ Daily backups to Google Cloud Storage.
 | Kan.bn | 4 AM | 7 days |
 | Outline | 4 AM | 7 days |
 | Radicale | 4 AM | 7 days |
-| imagineering-pm-bot | 4 AM | 7 days |
+| dreamfinder | 4 AM | 7 days |
 
 ```bash
 # Manual commands (run on VPS)
@@ -131,7 +131,7 @@ Daily backups to Google Cloud Storage.
 /opt/scripts/restore.sh kanbn    # Restore Kan.bn
 /opt/scripts/restore.sh outline  # Restore Outline
 /opt/scripts/restore.sh radicale # Restore Radicale
-/opt/scripts/restore.sh pm-bot   # Restore imagineering-pm-bot
+/opt/scripts/restore.sh pm-bot   # Restore dreamfinder
 ```
 
 ## Cloud Provider
@@ -298,12 +298,12 @@ Use base URL `https://dav.imagineering.cc` with your username/password in:
 
 ---
 
-# imagineering-pm-bot (Dreamfinder)
+# Dreamfinder
 
 Signal-based AI project management bot. Uses Claude Sonnet with ~75 MCP tools
 across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural language only.
 
-**Source**: [imagineering-cc/imagineering-pm-bot](https://github.com/imagineering-cc/imagineering-pm-bot)
+**Source**: [imagineering-cc/dreamfinder](https://github.com/imagineering-cc/dreamfinder)
 
 ## Architecture
 
@@ -327,9 +327,9 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 ## Setup
 
 ```bash
-# Deploy (source from https://github.com/imagineering-cc/imagineering-pm-bot)
+# Deploy (source from https://github.com/imagineering-cc/dreamfinder)
 ./scripts/deploy-to.sh 34.40.229.206 pm-bot
 
 # Check logs
-ssh 34.40.229.206 'docker logs -f imagineering-pm-bot'
+ssh 34.40.229.206 'docker logs -f dreamfinder'
 ```

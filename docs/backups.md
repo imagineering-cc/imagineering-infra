@@ -9,7 +9,7 @@ All services backup to **Google Cloud Storage**.
 | Kan.bn | PostgreSQL database | Daily 4 AM | 7 days |
 | Outline | PostgreSQL database | Daily 4 AM | 7 days |
 | Radicale | CalDAV/CardDAV collections | Daily 4 AM | 7 days |
-| imagineering-pm-bot | SQLite database | Daily 4 AM | 7 days |
+| Dreamfinder | SQLite database | Daily 4 AM | 7 days |
 
 ## Manual Operations
 

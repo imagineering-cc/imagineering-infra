@@ -11,7 +11,7 @@ services:
   bot:
     build:
       context: ./src
-    container_name: imagineering-pm-bot
+    container_name: dreamfinder
     restart: unless-stopped
     depends_on:
       - signal-api
