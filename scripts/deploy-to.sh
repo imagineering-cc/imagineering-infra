@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, outline, kanbn, radicale, matrix, backups, scripts
+# Services: all, caddy, site, outline, kanbn, radicale, matrix, backups, scripts
 
 set -e
 
@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|outline|kanbn|radicale|matrix|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -45,6 +45,21 @@ deploy_scripts() {
     fi
 
     echo "Scripts deployed to /opt/scripts/"
+}
+
+deploy_site() {
+    local SITE_SRC="$HOME/git/orgs/imagineering/website"
+
+    if [ ! -d "$SITE_SRC" ]; then
+        echo "ERROR: website repo not found at $SITE_SRC"
+        return 1
+    fi
+
+    echo "Deploying imagineering.cc landing page..."
+    ssh "$REMOTE" "sudo mkdir -p /srv/site"
+    rsync -avz --delete --exclude '.git' "$SITE_SRC/" "$REMOTE":/tmp/site/
+    ssh "$REMOTE" "sudo rsync -a --delete /tmp/site/ /srv/site/ && rm -rf /tmp/site"
+    echo "Site deployed to /srv/site"
 }
 
 deploy_service() {
@@ -413,6 +428,7 @@ case $SERVICE in
         deploy_scripts
         deploy_backups
         deploy_service caddy
+        deploy_site
         deploy_outline
         deploy_kanbn
         deploy_radicale
@@ -443,9 +459,12 @@ case $SERVICE in
     matrix)
         deploy_matrix
         ;;
+    site)
+        deploy_site
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|backups|scripts]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|backups|scripts|site]"
         exit 1
         ;;
 esac
