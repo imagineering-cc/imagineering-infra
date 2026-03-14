@@ -56,10 +56,9 @@ deploy_site() {
     fi
 
     echo "Deploying imagineering.cc landing page..."
-    ssh "$REMOTE" "sudo mkdir -p /srv/site"
-    rsync -avz --delete --exclude '.git' "$SITE_SRC/" "$REMOTE":/tmp/site/
-    ssh "$REMOTE" "sudo rsync -a --delete /tmp/site/ /srv/site/ && rm -rf /tmp/site"
-    echo "Site deployed to /srv/site"
+    ssh "$REMOTE" "mkdir -p ~/apps/site"
+    rsync -avz --delete --exclude '.git' "$SITE_SRC/" "$REMOTE":~/apps/site/
+    echo "Site deployed to ~/apps/site"
 }
 
 deploy_service() {

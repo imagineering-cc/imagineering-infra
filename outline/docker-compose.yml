@@ -86,6 +86,10 @@ services:
       mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
       mc mb myminio/outline --ignore-existing;
       mc anonymous set download myminio/outline;
+      mc mb myminio/kanbn-avatars --ignore-existing;
+      mc anonymous set download myminio/kanbn-avatars;
+      mc mb myminio/kanbn-attachments --ignore-existing;
+      mc anonymous set download myminio/kanbn-attachments;
       exit 0;
       "
     environment:
