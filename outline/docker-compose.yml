@@ -74,7 +74,8 @@ services:
     networks:
       - outline
 
-  # One-time setup to create the bucket
+  # One-time setup to create buckets for all services that use MinIO
+  # (Kan.bn buckets are created here because MinIO only runs in the Outline stack)
   minio-setup:
     image: minio/mc
     container_name: outline_minio_setup
