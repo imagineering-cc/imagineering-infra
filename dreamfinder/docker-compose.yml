@@ -1,24 +1,13 @@
 services:
-  signal-api:
-    image: bbernhard/signal-cli-rest-api:0.97
-    container_name: imagineering-signal-api
-    restart: unless-stopped
-    environment:
-      - MODE=normal
-    volumes:
-      - signal_data:/home/.local/share/signal-cli
-
   bot:
     build:
       context: ./src
     container_name: dreamfinder
     restart: unless-stopped
-    depends_on:
-      - signal-api
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - SIGNAL_API_URL=http://signal-api:8080
-      - SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
+      - MATRIX_HOMESERVER=${MATRIX_HOMESERVER:-https://matrix.imagineering.cc}
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
       - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
       - KAN_API_KEY=${KAN_API_KEY}
       - OUTLINE_BASE_URL=${OUTLINE_BASE_URL:-https://outline.imagineering.cc/api}
@@ -34,5 +23,4 @@ services:
       - bot_data:/app/data
 
 volumes:
-  signal_data:
   bot_data:

@@ -305,7 +305,8 @@ deploy_pm_bot() {
     echo "Generating .env from encrypted secrets..."
     sops -d "$PM_BOT_SECRETS" | yq -r '"# Dreamfinder Configuration (auto-generated from secrets.yaml)
 ANTHROPIC_API_KEY=\(.anthropic_api_key)
-SIGNAL_PHONE_NUMBER=\(.signal_phone_number)
+MATRIX_HOMESERVER=\(.matrix_homeserver)
+MATRIX_ACCESS_TOKEN=\(.matrix_access_token)
 KAN_BASE_URL=\(.kan_base_url)
 KAN_API_KEY=\(.kan_api_key)
 OUTLINE_BASE_URL=\(.outline_base_url)
