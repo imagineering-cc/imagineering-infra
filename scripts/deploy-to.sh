@@ -323,8 +323,11 @@ LOG_LEVEL=\(.log_level)"' > "$REPO_ROOT/dreamfinder/.env"
     # Copy docker compose and .env
     rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/dreamfinder/" "$REMOTE":~/apps/dreamfinder/
 
+    # Ensure MCP server submodule is initialized
+    (cd "$PM_BOT_SRC" && git submodule update --init)
+
     # Copy source code (Dart project)
-    rsync -avz --delete --exclude '.dart_tool' --exclude '.packages' --exclude 'data' --exclude '.env' "$PM_BOT_SRC/" "$REMOTE":~/apps/dreamfinder/src/
+    rsync -avz --delete --exclude '.dart_tool' --exclude '.packages' --exclude 'data' --exclude '.env' --exclude '.git' "$PM_BOT_SRC/" "$REMOTE":~/apps/dreamfinder/src/
 
     # Clean up local .env
     rm -f "$REPO_ROOT/dreamfinder/.env"
@@ -371,7 +374,7 @@ deploy_matrix() {
     echo "Deploying Matrix (Continuwuity + bridges + relay bot)..."
 
     local MATRIX_SECRETS="$REPO_ROOT/matrix/secrets.yaml"
-    local MATRIX_SRC="$HOME/git/orgs/imagineering/matrix"
+    local MATRIX_SRC="$HOME/git/orgs/imagineering/matrix-chat-superbridge"
 
     # Check for secrets file
     if [ ! -f "$MATRIX_SECRETS" ]; then
