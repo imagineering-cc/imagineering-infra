@@ -24,7 +24,7 @@ matrix.imagineering.cc {
 }
 
 imagineering.cc {
-    handle /api/contact {
+    handle_path /api/contact {
         reverse_proxy localhost:3014
     }
     handle {
