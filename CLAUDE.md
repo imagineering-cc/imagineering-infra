@@ -4,15 +4,15 @@ Monorepo for Imagineering infrastructure and self-hosted services.
 
 ## IMPORTANT: Production Server Safety
 
-**DO NOT run repeated/rapid commands on the production server (34.40.229.206).**
+**DO NOT run repeated/rapid commands on the production server (149.118.69.221).**
 
-The GCE instance has moderate resources (4GB RAM, 2 vCPU) but running many `docker exec`, `docker logs`, or SSH commands in quick succession can still cause issues.
+The OCI instance has moderate resources but running many `docker exec`, `docker logs`, or SSH commands in quick succession can still cause issues.
 
 **Instead:**
 - Set up a local dev environment to debug issues
 - Use `./scripts/deploy-to.sh` for deployments (tested, safe)
 - If you must debug production, run commands sparingly with pauses between them
-- To recover a crashed server: `gcloud compute instances reset imagineering-infra --zone=australia-southeast1-a`
+- To recover a crashed server: `oci compute instance action --action RESET --instance-id ocid1.instance.oc1.ap-sydney-1.anzxsljr5jyppsicpdt4ecunqcvoxmvhauzsq5co53joaumapptj3ktxoqhq `
 
 ## Structure
 
@@ -138,7 +138,7 @@ Daily backups to Google Cloud Storage.
 
 | Provider | Status | IP | Cost |
 |----------|--------|-----|------|
-| GCP Compute Engine (e2-medium) | Active | 34.40.229.206 | ~$24/mo |
+| OCI (Oracle Cloud) | Active | 149.118.69.221 | Free tier |
 
 ## Secrets Management
 
@@ -193,7 +193,7 @@ Self-hosted team wiki (Notion alternative). Real-time collaboration with edit hi
 
 ```bash
 # Deploy (secrets auto-decrypted)
-./scripts/deploy-to.sh 34.40.229.206 outline
+./scripts/deploy-to.sh 149.118.69.221 outline
 ```
 
 First user to sign up becomes admin. Invite team members from Settings → Members.
@@ -254,7 +254,7 @@ Kan.bn has built-in Trello import via OAuth. To import:
 
 ```bash
 # Deploy (builds from source, secrets auto-decrypted)
-./scripts/deploy-to.sh 34.40.229.206 kanbn
+./scripts/deploy-to.sh 149.118.69.221 kanbn
 ```
 
 First user to sign up becomes admin.
@@ -280,10 +280,10 @@ Self-hosted CalDAV/CardDAV server for team calendars and contacts.
 
 ```bash
 # Deploy (secrets auto-decrypted, htpasswd generated)
-./scripts/deploy-to.sh 34.40.229.206 radicale
+./scripts/deploy-to.sh 149.118.69.221 radicale
 
 # Also redeploy Caddy to pick up the new route
-./scripts/deploy-to.sh 34.40.229.206 caddy
+./scripts/deploy-to.sh 149.118.69.221 caddy
 
 # Test
 curl -u nick:password https://dav.imagineering.cc/.well-known/caldav
@@ -328,8 +328,8 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 
 ```bash
 # Deploy (source from https://github.com/imagineering-cc/dreamfinder)
-./scripts/deploy-to.sh 34.40.229.206 pm-bot
+./scripts/deploy-to.sh 149.118.69.221 pm-bot
 
 # Check logs
-ssh 34.40.229.206 'docker logs -f dreamfinder'
+ssh 149.118.69.221 'docker logs -f dreamfinder'
 ```

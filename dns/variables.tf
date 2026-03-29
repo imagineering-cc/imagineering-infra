@@ -15,7 +15,7 @@ variable "client_ip" {
 }
 
 variable "server_ip" {
-  description = "GCE instance static IP"
+  description = "OCI instance IP"
   type        = string
-  default     = "34.40.229.206"
+  default     = "149.118.69.221"
 }
