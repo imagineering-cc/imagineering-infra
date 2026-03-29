@@ -32,4 +32,18 @@ resource "namecheap_domain_records" "imagineering_cc" {
     type     = "A"
     address  = var.server_ip
   }
+
+  # SPF — authorize Brevo (Sendinblue) to send email for this domain
+  record {
+    hostname = "@"
+    type     = "TXT"
+    address  = "v=spf1 include:sendinblue.com ~all"
+  }
+
+  # DMARC — basic policy (monitor mode)
+  record {
+    hostname = "_dmarc"
+    type     = "TXT"
+    address  = "v=DMARC1; p=none;"
+  }
 }
