@@ -7,6 +7,7 @@ Zero dependencies — stdlib only.
 import os
 import sys
 import smtplib
+import threading
 from email.message import EmailMessage
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs
@@ -21,12 +22,24 @@ SITE_URL = os.environ.get("SITE_URL", "https://imagineering.cc")
 MAX_BODY = 10 * 1024  # 10 KB
 
 
+def _send_email(msg, sender_email, sender_name):
+    """Send email in a background thread."""
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(msg)
+        print(f"Sent email from {sender_email} ({sender_name})", file=sys.stderr)
+    except Exception as exc:
+        print(f"SMTP error: {exc}", file=sys.stderr)
+
+
 class ContactHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         # Reject oversized bodies
         length = int(self.headers.get("Content-Length", 0))
         if length > MAX_BODY:
-            self._redirect("?error=1")
+            self._respond(ok=False)
             return
 
         body = self.rfile.read(length).decode("utf-8")
@@ -34,7 +47,7 @@ class ContactHandler(BaseHTTPRequestHandler):
 
         # Honeypot — if filled, a bot submitted it
         if fields.get("_honey", [""])[0]:
-            self._redirect("?sent=1")
+            self._respond(ok=True)
             return
 
         name = fields.get("name", [""])[0].strip()
@@ -42,32 +55,23 @@ class ContactHandler(BaseHTTPRequestHandler):
         message = fields.get("message", [""])[0].strip()
 
         if not all([name, email, message]):
-            self._redirect("?error=1")
+            self._respond(ok=False)
             return
 
-        try:
-            msg = EmailMessage()
-            msg["From"] = SMTP_FROM
-            msg["To"] = CONTACT_TO
-            msg["Reply-To"] = email
-            msg["Subject"] = f"New enquiry from imagineering.cc — {name}"
-            msg.set_content(
-                f"Name: {name}\n"
-                f"Email: {email}\n\n"
-                f"{message}"
-            )
+        msg = EmailMessage()
+        msg["From"] = SMTP_FROM
+        msg["To"] = CONTACT_TO
+        msg["Reply-To"] = email
+        msg["Subject"] = f"New enquiry from imagineering.cc — {name}"
+        msg.set_content(
+            f"Name: {name}\n"
+            f"Email: {email}\n\n"
+            f"{message}"
+        )
 
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-                smtp.starttls()
-                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-                smtp.send_message(msg)
-
-            print(f"Sent email from {email} ({name})", file=sys.stderr)
-            self._redirect("?sent=1")
-
-        except Exception as exc:
-            print(f"SMTP error: {exc}", file=sys.stderr)
-            self._redirect("?error=1")
+        # Send in background so the user gets an instant redirect
+        threading.Thread(target=_send_email, args=(msg, email, name)).start()
+        self._respond(ok=True)
 
     def do_GET(self):
         """Health check on GET, 405 otherwise."""
@@ -79,10 +83,20 @@ class ContactHandler(BaseHTTPRequestHandler):
             self.send_response(405)
             self.end_headers()
 
-    def _redirect(self, query=""):
-        self.send_response(303)
-        self.send_header("Location", f"{SITE_URL}{query}")
-        self.end_headers()
+    def _respond(self, ok=True):
+        """JSON for fetch, redirect for plain form POST."""
+        if "application/json" in (self.headers.get("Accept", "")):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", SITE_URL)
+            self.end_headers()
+            status = "sent" if ok else "error"
+            self.wfile.write(f'{{"status":"{status}"}}'.encode())
+        else:
+            query = "?sent=1" if ok else "?error=1"
+            self.send_response(303)
+            self.send_header("Location", f"{SITE_URL}{query}")
+            self.end_headers()
 
     def log_message(self, fmt, *args):
         """Log to stderr (Docker captures this)."""
