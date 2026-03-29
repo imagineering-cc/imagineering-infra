@@ -1,7 +1,7 @@
 services:
   outline:
     image: docker.getoutline.com/outlinewiki/outline:latest
-    container_name: outline
+    container_name: img-outline
     restart: unless-stopped
     depends_on:
       - postgres
@@ -35,13 +35,13 @@ services:
       - WEB_CONCURRENCY=1
       - LOG_LEVEL=info
     ports:
-      - "3002:3000"
+      - "3012:3000"
     networks:
       - outline
 
   postgres:
     image: postgres:15-alpine
-    container_name: outline_postgres
+    container_name: img-outline-postgres
     restart: unless-stopped
     environment:
       - POSTGRES_USER=outline
@@ -54,14 +54,14 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: outline_redis
+    container_name: img-outline-redis
     restart: unless-stopped
     networks:
       - outline
 
   minio:
     image: minio/minio
-    container_name: outline_minio
+    container_name: img-outline-minio
     restart: unless-stopped
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
@@ -70,7 +70,7 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
+      - "9010:9000"
     networks:
       - outline
 
@@ -78,7 +78,7 @@ services:
   # (Kan.bn buckets are created here because MinIO only runs in the Outline stack)
   minio-setup:
     image: minio/mc
-    container_name: outline_minio_setup
+    container_name: img-outline-minio_setup
     depends_on:
       - minio
     entrypoint: >

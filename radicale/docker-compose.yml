@@ -1,7 +1,7 @@
 services:
   radicale:
     image: tomsquest/docker-radicale:latest
-    container_name: radicale
+    container_name: img-radicale
     restart: unless-stopped
     ports:
       - "127.0.0.1:5232:5232"

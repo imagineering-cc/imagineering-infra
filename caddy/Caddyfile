@@ -1,13 +1,13 @@
 outline.imagineering.cc {
-    reverse_proxy localhost:3002
+    reverse_proxy localhost:3012
 }
 
 storage.imagineering.cc {
-    reverse_proxy localhost:9000
+    reverse_proxy localhost:9010
 }
 
 kan.imagineering.cc {
-    reverse_proxy localhost:3003
+    reverse_proxy localhost:3013
 }
 
 dav.imagineering.cc {
@@ -26,4 +26,26 @@ matrix.imagineering.cc {
 imagineering.cc {
     root * /srv/site
     file_server
+}
+
+# --- xdeca (temporary, colocated on OCI — remove when xdeca moves to its own host) ---
+
+kb.xdeca.com {
+    reverse_proxy localhost:3002
+}
+
+wiki.xdeca.com {
+    redir https://kb.xdeca.com{uri} permanent
+}
+
+storage.xdeca.com {
+    reverse_proxy localhost:9000
+}
+
+tasks.xdeca.com {
+    reverse_proxy localhost:3003
+}
+
+dav.xdeca.com {
+    reverse_proxy localhost:5233
 }
