@@ -24,7 +24,7 @@ The OCI instance has moderate resources but running many `docker exec`, `docker 
 ├── outline/            # Team wiki (Notion alternative)
 ├── radicale/           # CalDAV/CardDAV server
 ├── scripts/            # Deployment & backup scripts
-├── dreamfinder/  # Signal PM bot (Dreamfinder)
+├── dreamfinder/  # Matrix PM bot (Dreamfinder)
 └── .sops.yaml          # SOPS encryption config
 ```
 
@@ -45,7 +45,7 @@ The OCI instance has moderate resources but running many `docker exec`, `docker 
 |---------|------|-----|-------------|
 | Caddy | 80/443 | - | Reverse proxy, auto-TLS |
 | Kan.bn | 3003 | kan.imagineering.cc | Kanban boards (Trello-like) |
-| Dreamfinder (pm-bot) | - | Signal | AI project management bot |
+| Dreamfinder (pm-bot) | - | Matrix | AI project management bot |
 | Outline | 3002 | outline.imagineering.cc | Team wiki (Notion-like) |
 | MinIO | 9000 | storage.imagineering.cc | S3-compatible file storage |
 | Radicale | 5232 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
@@ -92,10 +92,10 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 ┌─────────────────────────────────────────────────────────────────────┐
 │                 dreamfinder (standalone)                    │
 │                                                                    │
-│  ┌──────────┐    HTTP API     ┌──────────┐   Signal API   ┌──────┐│
-│  │  SQLite  │◄───────────────►│  Bot     │◄──────────────►│Users ││
-│  │ (local)  │                 │  (Dart)  │  signal-cli    │      ││
-│  └──────────┘                 └────┬─────┘                └──────┘│
+│  ┌──────────┐    HTTP API     ┌──────────┐   Matrix C-S API ┌─────┐│
+│  │  SQLite  │◄───────────────►│  Bot     │◄───────────────►│Users││
+│  │ (local)  │                 │  (Dart)  │  (Continuwuity) │     ││
+│  └──────────┘                 └────┬─────┘                 └─────┘│
 │                                    │                               │
 │                                    ▼                               │
 │                        kan.imagineering.cc                         │
@@ -107,7 +107,7 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 - `outline/` - own network with postgres, redis, minio
 - `kanbn/` - own network with postgres; uses shared MinIO via `storage.imagineering.cc`
 - `radicale/` - standalone container; file-based storage in Docker volume
-- `dreamfinder/` - own network with signal-cli-rest-api; talks to Kan.bn via public API
+- `dreamfinder/` - standalone container; talks to Matrix via Continuwuity homeserver, Kan.bn via public API
 - `caddy/` - `network_mode: host` to bind 80/443 directly
 
 **Shared resources:**
@@ -300,7 +300,7 @@ Use base URL `https://dav.imagineering.cc` with your username/password in:
 
 # Dreamfinder
 
-Signal-based AI project management bot. Uses Claude Sonnet with ~75 MCP tools
+Matrix-based AI project management bot. Uses Claude Sonnet with ~75 MCP tools
 across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural language only.
 
 **Source**: [imagineering-cc/dreamfinder](https://github.com/imagineering-cc/dreamfinder)
@@ -308,16 +308,17 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 ## Architecture
 
 - **Dart** application with Claude agent loop
-- **Signal** messaging via `signal-cli-rest-api` sidecar container
+- **Matrix** messaging via Continuwuity homeserver (matrix.imagineering.cc)
 - **SQLite** for conversation history and bot state
-- **MCP** tools for Kan.bn, Outline, Radicale, Playwright
+- **MCP** tools for Kan.bn, Outline, Radicale, Playwright (from shared `nickmeinhold/mcp-servers` submodule)
 
 ## Config
 
 | Variable | Description |
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Claude API key |
-| `SIGNAL_PHONE_NUMBER` | Bot's registered Signal phone number |
+| `MATRIX_HOMESERVER` | Matrix homeserver URL (e.g. https://matrix.imagineering.cc) |
+| `MATRIX_ACCESS_TOKEN` | Bot's Matrix access token |
 | `KAN_BASE_URL` | Kan.bn API URL |
 | `KAN_API_KEY` | Kan.bn API key |
 | `OUTLINE_BASE_URL` | Outline API URL |
