@@ -1,0 +1,14 @@
+services:
+  contact:
+    build: .
+    container_name: img-contact
+    restart: unless-stopped
+    environment:
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
+      - CONTACT_TO=${CONTACT_TO}
+    ports:
+      - "127.0.0.1:3014:8000"
