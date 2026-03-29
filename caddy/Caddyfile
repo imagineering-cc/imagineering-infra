@@ -24,8 +24,13 @@ matrix.imagineering.cc {
 }
 
 imagineering.cc {
-    root * /srv/site
-    file_server
+    handle /api/contact {
+        reverse_proxy localhost:3014
+    }
+    handle {
+        root * /srv/site
+        file_server
+    }
 }
 
 # --- xdeca (temporary, colocated on OCI — remove when xdeca moves to its own host) ---

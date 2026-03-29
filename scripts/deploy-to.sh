@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, site, outline, kanbn, radicale, matrix, backups, scripts
+# Services: all, caddy, site, outline, kanbn, radicale, matrix, contact, backups, scripts
 
 set -e
 
@@ -59,6 +59,43 @@ deploy_site() {
     ssh "$REMOTE" "mkdir -p ~/apps/site"
     rsync -avz --delete --exclude '.git' "$SITE_SRC/" "$REMOTE":~/apps/site/
     echo "Site deployed to ~/apps/site"
+}
+
+deploy_contact() {
+    echo "Deploying contact form relay..."
+
+    local CONTACT_SECRETS="$REPO_ROOT/contact/secrets.yaml"
+
+    # Check for secrets file
+    if [ ! -f "$CONTACT_SECRETS" ]; then
+        echo "ERROR: contact/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i contact/secrets.yaml"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$CONTACT_SECRETS" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
+SMTP_HOST=\(.smtp_host)
+SMTP_PORT=\(.smtp_port)
+SMTP_USERNAME=\(.smtp_username)
+SMTP_PASSWORD=\(.smtp_password)
+SMTP_FROM_EMAIL=\(.smtp_from_email)
+CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/contact/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/contact"
+    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/contact/" "$REMOTE":~/apps/contact/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/contact/.env"
+
+    # Build and start
+    ssh "$REMOTE" "cd ~/apps/contact && docker compose build && docker compose up -d"
+
+    echo "Contact form relay deployed!"
+    echo "  Endpoint: https://imagineering.cc/api/contact"
+    echo "  Health: curl localhost:3014/health"
 }
 
 deploy_service() {
@@ -437,6 +474,7 @@ case $SERVICE in
         deploy_radicale
         deploy_pm_bot
         deploy_matrix
+        deploy_contact
         ;;
     scripts)
         deploy_scripts
@@ -465,9 +503,12 @@ case $SERVICE in
     site)
         deploy_site
         ;;
+    contact)
+        deploy_contact
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|contact|backups|scripts|site]"
         exit 1
         ;;
 esac
