@@ -15,6 +15,15 @@ dav.imagineering.cc {
 }
 
 matrix.imagineering.cc {
+    handle /.well-known/matrix/server {
+        header Content-Type "application/json"
+        respond `{"m.server": "matrix.imagineering.cc:443"}`
+    }
+    handle /.well-known/matrix/client {
+        header Content-Type "application/json"
+        header Access-Control-Allow-Origin "*"
+        respond `{"m.homeserver": {"base_url": "https://matrix.imagineering.cc"}}`
+    }
     handle /mautrix-discord/* {
         reverse_proxy localhost:29334
     }
@@ -24,6 +33,15 @@ matrix.imagineering.cc {
 }
 
 imagineering.cc {
+    handle /.well-known/matrix/server {
+        header Content-Type "application/json"
+        respond `{"m.server": "matrix.imagineering.cc:443"}`
+    }
+    handle /.well-known/matrix/client {
+        header Content-Type "application/json"
+        header Access-Control-Allow-Origin "*"
+        respond `{"m.homeserver": {"base_url": "https://matrix.imagineering.cc"}}`
+    }
     handle_path /api/contact {
         reverse_proxy localhost:3014
     }
