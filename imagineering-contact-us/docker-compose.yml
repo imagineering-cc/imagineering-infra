@@ -1,7 +1,7 @@
 services:
-  contact:
+  imagineering-contact-us:
     build: .
-    container_name: img-contact
+    container_name: imagineering-contact-us
     restart: unless-stopped
     environment:
       - SMTP_HOST=${SMTP_HOST}

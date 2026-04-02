@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, site, outline, kanbn, radicale, matrix, contact, backups, scripts
+# Services: all, caddy, site, outline, kanbn, radicale, matrix, imagineering-contact-us, backups, scripts
 
 set -e
 
@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -62,14 +62,14 @@ deploy_site() {
 }
 
 deploy_contact() {
-    echo "Deploying contact form relay..."
+    echo "Deploying imagineering-contact-us..."
 
-    local CONTACT_SECRETS="$REPO_ROOT/contact/secrets.yaml"
+    local CONTACT_SECRETS="$REPO_ROOT/imagineering-contact-us/secrets.yaml"
 
     # Check for secrets file
     if [ ! -f "$CONTACT_SECRETS" ]; then
-        echo "ERROR: contact/secrets.yaml not found"
-        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i contact/secrets.yaml"
+        echo "ERROR: imagineering-contact-us/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i imagineering-contact-us/secrets.yaml"
         return 1
     fi
 
@@ -81,19 +81,19 @@ SMTP_PORT=\(.smtp_port)
 SMTP_USERNAME=\(.smtp_username)
 SMTP_PASSWORD=\(.smtp_password)
 SMTP_FROM_EMAIL=\(.smtp_from_email)
-CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/contact/.env"
+CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Deploy files
-    ssh "$REMOTE" "mkdir -p ~/apps/contact"
-    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/contact/" "$REMOTE":~/apps/contact/
+    ssh "$REMOTE" "mkdir -p ~/apps/imagineering-contact-us"
+    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/imagineering-contact-us/" "$REMOTE":~/apps/imagineering-contact-us/
 
     # Clean up local .env
-    rm -f "$REPO_ROOT/contact/.env"
+    rm -f "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Build and start
-    ssh "$REMOTE" "cd ~/apps/contact && docker compose build && docker compose up -d"
+    ssh "$REMOTE" "cd ~/apps/imagineering-contact-us && docker compose build && docker compose up -d"
 
-    echo "Contact form relay deployed!"
+    echo "imagineering-contact-us deployed!"
     echo "  Endpoint: https://imagineering.cc/api/contact"
     echo "  Health: curl localhost:3014/health"
 }
@@ -503,12 +503,12 @@ case $SERVICE in
     site)
         deploy_site
         ;;
-    contact)
+    imagineering-contact-us|contact)
         deploy_contact
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|contact|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|imagineering-contact-us|backups|scripts|site]"
         exit 1
         ;;
 esac
