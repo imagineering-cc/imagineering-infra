@@ -1,0 +1,24 @@
+# Claudius Maximus — headless email-polling Claude Code agent.
+#
+# Source is rsynced from ~/git/experiments/containerized-claude/claudius-maximus-container/
+# by deploy-to.sh. This file lives in imagineering-infra for consistent deployment.
+#
+# Deploy: ./scripts/deploy-to.sh 149.118.69.221 claudius
+
+services:
+  claudius:
+    build:
+      context: ./src
+    container_name: claudius
+    restart: unless-stopped
+    env_file: .env
+    shm_size: '256m'
+    volumes:
+      - claudius_logs:/workspace/logs
+      - claudius_repos:/workspace/repos
+      - claudius_attachments:/workspace/attachments
+
+volumes:
+  claudius_logs:
+  claudius_repos:
+  claudius_attachments:
