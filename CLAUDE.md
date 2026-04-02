@@ -24,6 +24,7 @@ The OCI instance has moderate resources but running many `docker exec`, `docker 
 ├── outline/            # Team wiki (Notion alternative)
 ├── radicale/           # CalDAV/CardDAV server
 ├── scripts/            # Deployment & backup scripts
+├── claudius/            # Headless email agent (Claudius Maximus)
 ├── dreamfinder/  # Matrix PM bot (Dreamfinder)
 └── .sops.yaml          # SOPS encryption config
 ```
@@ -49,6 +50,7 @@ The OCI instance has moderate resources but running many `docker exec`, `docker 
 | Outline | 3002 | outline.imagineering.cc | Team wiki (Notion-like) |
 | MinIO | 9000 | storage.imagineering.cc | S3-compatible file storage |
 | Radicale | 5232 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
+| Claudius | - | - | Headless email-polling Claude Code agent |
 
 ## Container Architecture
 
@@ -101,12 +103,24 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 │                        kan.imagineering.cc                         │
 │                          (Kan.bn API)                              │
 └─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    claudius (standalone)                             │
+│                                                                     │
+│  ┌──────────┐    IMAP/SMTP     ┌──────────┐   Claude Code   ┌─────┐│
+│  │  Volumes │◄───────────────►│  Agent   │◄──────────────►│Email││
+│  │(logs,repo│                 │  Loop   │  (headless)     │     ││
+│  │,attach)  │                 └──────────┘                 └─────┘│
+│                                                                     │
+│  No HTTP — headless email worker with Playwright browser            │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 **Network isolation:**
 - `outline/` - own network with postgres, redis, minio
 - `kanbn/` - own network with postgres; uses shared MinIO via `storage.imagineering.cc`
 - `radicale/` - standalone container; file-based storage in Docker volume
+- `claudius/` - standalone container; headless email worker, no network dependencies on other services
 - `dreamfinder/` - standalone container; talks to Matrix via Continuwuity homeserver, Kan.bn via public API
 - `caddy/` - `network_mode: host` to bind 80/443 directly
 
@@ -124,6 +138,7 @@ Daily backups to Google Cloud Storage.
 | Outline | 4 AM | 7 days |
 | Radicale | 4 AM | 7 days |
 | dreamfinder | 4 AM | 7 days |
+| Claudius | 4 AM | 7 days |
 
 ```bash
 # Manual commands (run on VPS)
@@ -334,3 +349,32 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 # Check logs
 ssh 149.118.69.221 'docker logs -f dreamfinder'
 ```
+
+---
+
+# Claudius Maximus
+
+Headless email-polling Claude Code agent. Polls IMAP inbox, processes emails with Claude, replies via SMTP.
+Autonomous AI pen pal with research journal, self-evolution, and proactive outreach.
+
+**Source**: `~/git/experiments/containerized-claude/claudius-maximus-container/`
+
+## Architecture
+
+- **Node.js** base image with Claude Code CLI + Playwright MCP (headless Chromium)
+- **IMAP/SMTP** for email communication (Gmail with App Passwords)
+- **GitHub** repos for persistent memory (research journal + email archive)
+- **Docker volumes** for state (logs, repos, attachments)
+- No HTTP service — pure background worker
+
+## Setup
+
+```bash
+# Deploy (source rsynced from containerized-claude repo)
+./scripts/deploy-to.sh 149.118.69.221 claudius
+
+# Check logs
+ssh 149.118.69.221 'docker logs -f claudius'
+```
+
+See `claudius-maximus-container/CLAUDE.md` in the source repo for full architecture docs.

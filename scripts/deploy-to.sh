@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, site, outline, kanbn, radicale, matrix, imagineering-contact-us, backups, scripts
+# Services: all, caddy, site, outline, kanbn, radicale, matrix, imagineering-contact-us, claudius, backups, scripts
 
 set -e
 
@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|imagineering-contact-us|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -463,6 +463,92 @@ RELAY_LOG_LEVEL=\(.relay_log_level)"' > "$REPO_ROOT/matrix/.env"
     echo "  Logs: ssh $REMOTE 'cd ~/apps/matrix && docker compose logs --tail 20'"
 }
 
+deploy_claudius() {
+    echo "Deploying Claudius Maximus (headless email agent)..."
+
+    local CLAUDIUS_SECRETS="$REPO_ROOT/claudius/secrets.yaml"
+    local CLAUDIUS_SRC="$HOME/git/experiments/containerized-claude/claudius-maximus-container"
+
+    # Check for secrets file
+    if [ ! -f "$CLAUDIUS_SECRETS" ]; then
+        echo "ERROR: claudius/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i claudius/secrets.yaml"
+        return 1
+    fi
+
+    # Check for source code
+    if [ ! -d "$CLAUDIUS_SRC" ]; then
+        echo "ERROR: Claudius source not found at $CLAUDIUS_SRC"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$CLAUDIUS_SECRETS" | yq -r '"# Claudius Configuration (auto-generated from secrets.yaml)
+CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
+CLAUDE_CREDENTIALS_JSON=\(.claude_credentials_json)
+GH_TOKEN=\(.gh_token)
+AGENT_NAME=\(.agent_name)
+MY_EMAIL=\(.my_email)
+PEER_EMAIL=\(.peer_email)
+OWNER_EMAIL=\(.owner_email)
+CC_EMAIL=\(.cc_email)
+IMAP_HOST=\(.imap_host)
+IMAP_PORT=\(.imap_port)
+IMAP_USER=\(.imap_user)
+IMAP_PASS=\(.imap_pass)
+SMTP_HOST=\(.smtp_host)
+SMTP_PORT=\(.smtp_port)
+GIT_USER_NAME=\(.git_user_name)
+GIT_USER_EMAIL=\(.git_user_email)
+JOURNAL_REPO=\(.journal_repo)
+ARCHIVE_REPO=\(.archive_repo)
+ALLOWED_SENDERS=\(.allowed_senders)
+SEND_FIRST=\(.send_first)
+POLL_INTERVAL=\(.poll_interval)
+MODEL=\(.model)
+MAX_TURNS=\(.max_turns)
+WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
+QUOTA_RESET_DAY=\(.quota_reset_day)
+QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
+MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
+REPORT_EVERY_N=\(.report_every_n)
+EVOLUTION_PROBABILITY=\(.evolution_probability)
+EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
+INITIATIVE_PROBABILITY=\(.initiative_probability)
+INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
+INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/claudius/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/claudius/src"
+
+    # Copy docker compose and .env
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/claudius/" "$REMOTE":~/apps/claudius/
+
+    # Copy source code
+    rsync -avz --delete \
+        --exclude '.git' \
+        --exclude 'node_modules' \
+        --exclude '__pycache__' \
+        --exclude '.env' \
+        --exclude '.env.example' \
+        --exclude 'fly.toml' \
+        --exclude 'deploy-fly.sh' \
+        --exclude 'msmtprc' \
+        --exclude '.claude-credentials.json' \
+        --exclude 'playwright-storage.json' \
+        "$CLAUDIUS_SRC/" "$REMOTE":~/apps/claudius/src/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/claudius/.env"
+
+    # Build and start
+    ssh "$REMOTE" "cd ~/apps/claudius && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+
+    echo "Claudius deployed!"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f claudius'"
+}
+
 case $SERVICE in
     all)
         deploy_scripts
@@ -475,6 +561,7 @@ case $SERVICE in
         deploy_pm_bot
         deploy_matrix
         deploy_contact
+        deploy_claudius
         ;;
     scripts)
         deploy_scripts
@@ -506,9 +593,12 @@ case $SERVICE in
     imagineering-contact-us|contact)
         deploy_contact
         ;;
+    claudius)
+        deploy_claudius
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|imagineering-contact-us|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|claudius|imagineering-contact-us|backups|scripts|site]"
         exit 1
         ;;
 esac

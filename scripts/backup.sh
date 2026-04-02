@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified backup script for all services
 # Backs up to Google Cloud Storage via rclone + redundant copies to GitHub
-# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot]
+# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius]
 
 SERVICE=${1:-all}
 BACKUP_DIR="/tmp/backups"
@@ -89,6 +89,26 @@ backup_radicale() {
   log "Radicale backup complete: radicale-$DATE.tar.gz"
 }
 
+backup_claudius() {
+  log "Backing up Claudius..."
+
+  local backup_file="$BACKUP_DIR/claudius-$DATE.tar.gz"
+
+  # Tar critical persistent state from the logs volume
+  docker exec claudius tar czf - \
+    /workspace/logs/agent-state.json \
+    /workspace/logs/persona-evolution.md \
+    /workspace/logs/conversation.log \
+    /workspace/logs/playwright-storage.json \
+    /workspace/logs/initiative-state.json \
+    2>/dev/null > "$backup_file"
+
+  # Upload to object storage
+  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/claudius/"
+
+  log "Claudius backup complete: claudius-$DATE.tar.gz"
+}
+
 backup_to_github() {
   local services=("$@")
 
@@ -168,6 +188,8 @@ cleanup_old_backups() {
     --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
   rclone delete "$RCLONE_REMOTE:$BUCKET/radicale/" \
     --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
+  rclone delete "$RCLONE_REMOTE:$BUCKET/claudius/" \
+    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
 
   log "Cleanup complete"
 }
@@ -176,7 +198,7 @@ cleanup_old_backups() {
 case $SERVICE in
   all)
     SUCCEEDED=()
-    for svc in kanbn outline radicale pm-bot; do
+    for svc in kanbn outline radicale pm-bot claudius; do
       if "backup_${svc//-/_}"; then
         SUCCEEDED+=("$svc")
       else
@@ -201,11 +223,14 @@ case $SERVICE in
   pm-bot)
     backup_pm_bot && backup_to_github pm-bot || FAILED_SERVICES+=(pm-bot)
     ;;
+  claudius)
+    backup_claudius && backup_to_github claudius || FAILED_SERVICES+=(claudius)
+    ;;
   cleanup)
     cleanup_old_backups
     ;;
   *)
-    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|cleanup]"
+    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|cleanup]"
     exit 1
     ;;
 esac
