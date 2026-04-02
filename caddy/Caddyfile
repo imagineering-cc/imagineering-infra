@@ -72,3 +72,9 @@ tasks.xdeca.com {
 dav.xdeca.com {
     reverse_proxy localhost:5233
 }
+
+# --- Call on Clare (colocated on OCI) ---
+
+n8n.callonclare.com.au {
+    reverse_proxy localhost:5678
+}
