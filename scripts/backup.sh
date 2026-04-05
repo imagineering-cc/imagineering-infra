@@ -1,19 +1,18 @@
 #!/bin/bash
 # Unified backup script for all services
-# Backs up to Google Cloud Storage via rclone + redundant copies to GitHub
+# Dumps databases/data, pushes to GitHub (imagineering-cc/imagineering-backups)
 # Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius]
 
 SERVICE=${1:-all}
 BACKUP_DIR="/tmp/backups"
 DATE=$(date +%Y-%m-%d)
-RCLONE_REMOTE="gcs"
-BUCKET="imagineering-backups"
 RETENTION_DAYS=7
 FAILED_SERVICES=()
 
 # GitHub backup config
 GITHUB_BACKUP_REPO="git@github-backups:imagineering-cc/imagineering-backups.git"
 GITHUB_BACKUP_DIR="/tmp/imagineering-backups"
+GITHUB_REPO_SIZE_ALERT_MB=500
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,6 +27,40 @@ error() {
   echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2
 }
 
+send_telegram_alert() {
+  local message="$1"
+  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+    log "Telegram alert skipped (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)"
+    return 0
+  fi
+  local -a args=(
+    -s -X POST
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+    -d "chat_id=$TELEGRAM_CHAT_ID"
+    -d "parse_mode=HTML"
+    --data-urlencode "text=$message"
+  )
+  if [ -n "$TELEGRAM_THREAD_ID" ]; then
+    args+=(-d "message_thread_id=$TELEGRAM_THREAD_ID")
+  fi
+  curl "${args[@]}" > /dev/null 2>&1 || true
+}
+
+check_repo_size() {
+  if [ ! -d "$GITHUB_BACKUP_DIR" ]; then
+    return 0
+  fi
+  local size_mb
+  size_mb=$(du -sm "$GITHUB_BACKUP_DIR" --exclude='.git' 2>/dev/null | awk '{print $1}')
+  if [ -z "$size_mb" ]; then
+    return 0
+  fi
+  if [ "$size_mb" -gt "$GITHUB_REPO_SIZE_ALERT_MB" ]; then
+    log "GitHub backup payload is ${size_mb} MB (threshold: ${GITHUB_REPO_SIZE_ALERT_MB} MB)"
+    send_telegram_alert "$(printf '<b>Backup Size Alert</b>\nGitHub backup payload: %s MB (threshold: %s MB)\nConsider pruning old data or increasing the threshold.' "$size_mb" "$GITHUB_REPO_SIZE_ALERT_MB")"
+  fi
+}
+
 # Create backup directory
 mkdir -p "$BACKUP_DIR"
 
@@ -40,9 +73,6 @@ backup_kanbn() {
   docker exec kanbn_postgres \
     pg_dump -U kanbn kanbn | gzip > "$backup_file"
 
-  # Upload to object storage
-  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/kanbn/"
-
   log "Kan.bn backup complete: kanbn-$DATE.sql.gz"
 }
 
@@ -53,9 +83,6 @@ backup_pm_bot() {
 
   # Copy SQLite database from container volume
   docker cp dreamfinder:/app/data/kan-bot.db "$backup_file"
-
-  # Upload to object storage
-  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/pm-bot/"
 
   log "Dreamfinder backup complete: pm-bot-$DATE.db"
 }
@@ -69,9 +96,6 @@ backup_outline() {
   docker exec outline_postgres \
     pg_dump -U outline outline | gzip > "$backup_file"
 
-  # Upload to object storage
-  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/outline/"
-
   log "Outline backup complete: outline-$DATE.sql.gz"
 }
 
@@ -82,9 +106,6 @@ backup_radicale() {
 
   # Tar the collections from the Docker volume
   docker exec radicale tar czf - /data/collections > "$backup_file"
-
-  # Upload to object storage
-  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/radicale/"
 
   log "Radicale backup complete: radicale-$DATE.tar.gz"
 }
@@ -102,9 +123,6 @@ backup_claudius() {
     /workspace/logs/playwright-storage.json \
     /workspace/logs/initiative-state.json \
     2>/dev/null > "$backup_file"
-
-  # Upload to object storage
-  rclone copy "$backup_file" "$RCLONE_REMOTE:$BUCKET/claudius/"
 
   log "Claudius backup complete: claudius-$DATE.tar.gz"
 }
@@ -140,9 +158,8 @@ backup_to_github() {
     }
   fi
 
-  # Copy each service dump (auto-detect file extension)
+  # Copy each service dump, decompressing so git deltas work
   for svc in "${services[@]}"; do
-    # Find the backup file regardless of extension (.sql.gz, .tar.gz, .db, etc.)
     local dump
     dump=$(find "$BACKUP_DIR" -name "${svc}-${DATE}.*" -type f 2>/dev/null | head -1)
 
@@ -151,11 +168,21 @@ backup_to_github() {
       continue
     fi
 
-    local ext="${dump#"$BACKUP_DIR/${svc}-${DATE}"}"
-    local dest="$GITHUB_BACKUP_DIR/${svc}${ext}"
-
-    cp "$dump" "$dest"
-    log "Copied $svc backup → ${svc}${ext}"
+    case "$dump" in
+      *.sql.gz)
+        gunzip -c "$dump" > "$GITHUB_BACKUP_DIR/${svc}.sql"
+        log "Decompressed $svc backup → ${svc}.sql"
+        ;;
+      *.tar.gz)
+        gunzip -c "$dump" > "$GITHUB_BACKUP_DIR/${svc}.tar"
+        log "Decompressed $svc backup → ${svc}.tar"
+        ;;
+      *)
+        local ext="${dump##*.}"
+        cp "$dump" "$GITHUB_BACKUP_DIR/${svc}.${ext}"
+        log "Copied $svc backup → ${svc}.${ext}"
+        ;;
+    esac
   done
 
   # Commit and push
@@ -171,26 +198,13 @@ backup_to_github() {
       git -C "$GITHUB_BACKUP_DIR" push --set-upstream origin main
     log "Backups pushed to GitHub"
   fi
+
+  check_repo_size
 }
 
 cleanup_old_backups() {
-  log "Cleaning up backups older than $RETENTION_DAYS days..."
-
-  # Clean local temp backups
+  log "Cleaning up local backups older than $RETENTION_DAYS days..."
   find "$BACKUP_DIR" -type f -mtime +$RETENTION_DAYS -delete 2>/dev/null || true
-
-  # Clean remote backups (rclone delete with min-age)
-  rclone delete "$RCLONE_REMOTE:$BUCKET/kanbn/" \
-    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-  rclone delete "$RCLONE_REMOTE:$BUCKET/outline/" \
-    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-  rclone delete "$RCLONE_REMOTE:$BUCKET/pm-bot/" \
-    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-  rclone delete "$RCLONE_REMOTE:$BUCKET/radicale/" \
-    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-  rclone delete "$RCLONE_REMOTE:$BUCKET/claudius/" \
-    --min-age "${RETENTION_DAYS}d" 2>/dev/null || true
-
   log "Cleanup complete"
 }
 

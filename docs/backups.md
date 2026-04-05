@@ -1,6 +1,6 @@
 # Backup & Restore
 
-All services backup to **Google Cloud Storage**.
+All services backup to **GitHub** (imagineering-cc/imagineering-backups).
 
 ## Overview
 
@@ -10,6 +10,7 @@ All services backup to **Google Cloud Storage**.
 | Outline | PostgreSQL database | Daily 4 AM | 7 days |
 | Radicale | CalDAV/CardDAV collections | Daily 4 AM | 7 days |
 | Dreamfinder | SQLite database | Daily 4 AM | 7 days |
+| Claudius | Agent state files | Daily 4 AM | 7 days |
 
 ## Manual Operations
 
@@ -24,14 +25,7 @@ All services backup to **Google Cloud Storage**.
 /opt/scripts/backup.sh outline
 /opt/scripts/backup.sh radicale
 /opt/scripts/backup.sh pm-bot
-```
-
-### List Remote Backups
-
-```bash
-rclone ls gcs:imagineering-backups/
-rclone ls gcs:imagineering-backups/kanbn/
-rclone ls gcs:imagineering-backups/outline/
+/opt/scripts/backup.sh claudius
 ```
 
 ### Check Backup Logs
@@ -45,33 +39,33 @@ tail -f /var/log/backup.log
 ### Manual Restore
 
 ```bash
-# Restore latest backup
+# Restore latest backup (pulls from GitHub)
 /opt/scripts/restore.sh kanbn
 /opt/scripts/restore.sh outline
 /opt/scripts/restore.sh radicale
 /opt/scripts/restore.sh pm-bot
-
-# Restore specific date
-/opt/scripts/restore.sh kanbn 2024-01-15
-/opt/scripts/restore.sh outline 2024-01-15
+/opt/scripts/restore.sh claudius
 ```
 
 ### Restore Process
 
-1. Script downloads backup from GCS
+1. Script clones backup repo from GitHub (shallow)
 2. Stops the service
 3. Drops and recreates database (or restores files)
 4. Restores PostgreSQL dump (or tar archive)
 5. Restarts the service
 
-## Backup File Locations
+## Backup Files in GitHub Repo
 
-| Service | Remote Path | Contents |
-|---------|-------------|----------|
-| Kan.bn | `imagineering-backups/kanbn/` | `kanbn-YYYY-MM-DD.sql.gz` |
-| Outline | `imagineering-backups/outline/` | `outline-YYYY-MM-DD.sql.gz` |
-| Radicale | `imagineering-backups/radicale/` | `radicale-YYYY-MM-DD.tar.gz` |
-| PM Bot | `imagineering-backups/pm-bot/` | `pm-bot-YYYY-MM-DD.db` |
+| Service | File | Contents |
+|---------|------|----------|
+| Kan.bn | `kanbn.sql` | Decompressed PostgreSQL dump |
+| Outline | `outline.sql` | Decompressed PostgreSQL dump |
+| Radicale | `radicale.tar` | Decompressed collections archive |
+| Dreamfinder | `pm-bot.db` | SQLite database |
+| Claudius | `claudius.tar` | Decompressed state archive |
+
+Files are stored decompressed so git deltas work efficiently.
 
 ## Troubleshooting
 
@@ -85,12 +79,12 @@ cat /etc/cron.d/backup
 tail -50 /var/log/backup.log
 ```
 
-### rclone connection issues?
+### GitHub push failing?
 
 ```bash
-# Test connection
-rclone lsd gcs:
+# Test deploy key
+ssh -T git@github-backups
 
-# Check config
-cat ~/.config/rclone/rclone.conf
+# Check key exists
+ls -la ~/.ssh/imagineering-backups-deploy
 ```

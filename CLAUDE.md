@@ -6,7 +6,7 @@ Monorepo for Imagineering infrastructure and self-hosted services.
 
 **DO NOT run repeated/rapid commands on the production server (149.118.69.221).**
 
-The OCI instance has moderate resources but running many `docker exec`, `docker logs`, or SSH commands in quick succession can still cause issues.
+The OCI instance has decent resources (24GB RAM, 4 vCPU) but running many `docker exec`, `docker logs`, or SSH commands in quick succession can still cause issues.
 
 **Instead:**
 - Set up a local dev environment to debug issues
@@ -18,7 +18,7 @@ The OCI instance has moderate resources but running many `docker exec`, `docker 
 
 ```
 .
-├── backups/            # Backup config (Google Cloud Storage)
+├── backups/            # Backup config (GitHub)
 ├── caddy/              # Reverse proxy (Caddy)
 ├── kanbn/              # Kanban boards (Trello alternative)
 ├── outline/            # Team wiki (Notion alternative)
@@ -130,7 +130,7 @@ Each service has its own `docker-compose.yml` and isolated network. Caddy uses `
 
 ## Backups
 
-Daily backups to Google Cloud Storage.
+Daily backups to GitHub (imagineering-cc/imagineering-backups).
 
 | Service | Schedule | Retention |
 |---------|----------|-----------|

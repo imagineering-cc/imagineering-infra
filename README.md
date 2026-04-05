@@ -14,9 +14,9 @@ Infrastructure monorepo for self-hosted services.
 
 ## Infrastructure
 
-| Provider | Status | Cost |
-|----------|--------|------|
-| GCP Compute Engine (e2-medium) | **Active** | ~$24/mo |
+| Provider | Status | IP | Cost |
+|----------|--------|-----|------|
+| OCI (Oracle Cloud) | **Active** | 149.118.69.221 | Free tier |
 
 ## Architecture
 
@@ -46,7 +46,7 @@ age-keygen -o ~/.config/sops/age/keys.txt
 ### 2. Deploy services
 
 ```bash
-./scripts/deploy-to.sh 34.40.229.206 all
+./scripts/deploy-to.sh 149.118.69.221 all
 ```
 
 ## Repository Structure

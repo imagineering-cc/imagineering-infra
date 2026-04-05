@@ -51,7 +51,17 @@ imagineering.cc {
     }
 }
 
-# --- xdeca (temporary, colocated on OCI — remove when xdeca moves to its own host) ---
+# --- YouTube RAG ---
+
+rag.imagineering.cc {
+    reverse_proxy localhost:3010
+}
+
+rag-api.imagineering.cc {
+    reverse_proxy localhost:8010
+}
+
+# --- xdeca (colocated on the same OCI instance) ---
 
 kb.xdeca.com {
     reverse_proxy localhost:3002
