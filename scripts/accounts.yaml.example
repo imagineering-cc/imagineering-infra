@@ -1,0 +1,23 @@
+# OCI accounts for auto-provisioning
+# Copy this file to accounts.yaml and fill in your details.
+# See docs/oci-provisioning-guide.md for step-by-step instructions.
+
+accounts:
+  - name: my-server           # whatever you want to call it
+    profile: DEFAULT           # matches the profile name in ~/.oci/config
+    region: ap-sydney-1        # your OCI region
+    compartment_id: "ocid1.tenancy.oc1..paste-yours-here"
+    subnet_id: "ocid1.subnet.oc1.ap-sydney-1.paste-yours-here"
+    image_id: "ocid1.image.oc1.ap-sydney-1.paste-yours-here"
+    availability_domain: "Xxxx:AP-SYDNEY-1-AD-1"
+    instance_name: "my-server"
+
+  # Want to double your chances? Add a second account in a different region:
+  # - name: melbourne
+  #   profile: melbourne
+  #   region: ap-melbourne-1
+  #   compartment_id: "ocid1.tenancy.oc1..paste-yours-here"
+  #   subnet_id: "ocid1.subnet.oc1.ap-melbourne-1.paste-yours-here"
+  #   image_id: "ocid1.image.oc1.ap-melbourne-1.paste-yours-here"
+  #   availability_domain: "Xxxx:AP-MELBOURNE-1-AD-1"
+  #   instance_name: "my-server-mel"
