@@ -306,10 +306,10 @@ RADICALE_PASSWORD=\(.radicale_password)
 PLAYWRIGHT_ENABLED=\(.playwright_enabled)
 BOT_NAME=\(.bot_name)
 LOG_LEVEL=\(.log_level)
-API_KEY=\(.api_key // "")
-LIVEKIT_URL=\(.livekit_url // "")
-LIVEKIT_API_KEY=\(.livekit_api_key // "")
-LIVEKIT_API_SECRET=\(.livekit_api_secret // "")"' > "$REPO_ROOT/dreamfinder/.env"
+API_KEY=\(.api_key)
+LIVEKIT_URL=\(.livekit_url)
+LIVEKIT_API_KEY=\(.livekit_api_key)
+LIVEKIT_API_SECRET=\(.livekit_api_secret)"' > "$REPO_ROOT/dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder/src"
