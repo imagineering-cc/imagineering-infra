@@ -51,6 +51,12 @@ imagineering.cc {
     }
 }
 
+# --- Dreamfinder API ---
+
+dreamfinder.imagineering.cc {
+    reverse_proxy localhost:8081
+}
+
 # --- YouTube RAG ---
 
 rag.imagineering.cc {

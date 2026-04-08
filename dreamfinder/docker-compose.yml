@@ -19,6 +19,13 @@ services:
       - PLAYWRIGHT_ENABLED=${PLAYWRIGHT_ENABLED:-false}
       - BOT_NAME=${BOT_NAME:-Dreamfinder}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - API_KEY=${API_KEY}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
+      - HEALTH_PORT=8081
     volumes:
       - bot_data:/app/data
 
