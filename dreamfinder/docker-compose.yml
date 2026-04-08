@@ -4,6 +4,8 @@ services:
       context: ./src
     container_name: dreamfinder
     restart: unless-stopped
+    ports:
+      - "8081:8081"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MATRIX_HOMESERVER=${MATRIX_HOMESERVER:-https://matrix.imagineering.cc}
