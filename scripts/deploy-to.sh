@@ -326,11 +326,71 @@ LIVEKIT_API_SECRET=\(.livekit_api_secret)"' > "$REPO_ROOT/dreamfinder/.env"
     # Clean up local .env
     rm -f "$REPO_ROOT/dreamfinder/.env"
 
-    # Build and start (bot + signal-cli-rest-api)
+    # Ensure shared network exists (allows text brain to be reachable by voice brain)
+    ssh "$REMOTE" "docker network inspect imagineering >/dev/null 2>&1 || docker network create imagineering"
+
+    # Build and start
     ssh "$REMOTE" "cd ~/apps/dreamfinder && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
 
     echo "Dreamfinder deployed!"
     echo "  Check logs: ssh $REMOTE 'docker logs -f dreamfinder'"
+}
+
+deploy_embodied_dreamfinder() {
+    echo "Deploying Embodied Dreamfinder (voice avatar)..."
+
+    local EDF_SECRETS="$REPO_ROOT/embodied-dreamfinder/secrets.yaml"
+    local EDF_SRC="$HOME/git/orgs/imagineering/embodied-dreamfinder"
+
+    # Check for secrets file
+    if [ ! -f "$EDF_SECRETS" ]; then
+        echo "ERROR: embodied-dreamfinder/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i embodied-dreamfinder/secrets.yaml"
+        return 1
+    fi
+
+    # Check for source code
+    if [ ! -d "$EDF_SRC" ]; then
+        echo "ERROR: embodied-dreamfinder source not found at $EDF_SRC"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$EDF_SECRETS" | yq -r '"# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)
+OPENAI_API_KEY=\(.openai_api_key)
+KAN_BASE_URL=\(.kan_base_url)
+KAN_API_KEY=\(.kan_api_key)
+KAN_BOARD_ID=\(.kan_board_id)
+OUTLINE_BASE_URL=\(.outline_base_url)
+OUTLINE_API_KEY=\(.outline_api_key)
+RADICALE_CALENDAR_URL=\(.radicale_calendar_url)
+RADICALE_USERNAME=\(.radicale_username)
+RADICALE_PASSWORD=\(.radicale_password)
+DREAMFINDER_API_URL=\(.dreamfinder_api_url)
+DREAMFINDER_API_KEY=\(.dreamfinder_api_key)"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
+
+    # Copy docker compose and .env
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/embodied-dreamfinder/" "$REMOTE":~/apps/embodied-dreamfinder/
+
+    # Copy source code (Node.js project + avatar GLB)
+    rsync -avz --delete --exclude 'node_modules' --exclude '.env' --exclude '.git' "$EDF_SRC/" "$REMOTE":~/apps/embodied-dreamfinder/src/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/embodied-dreamfinder/.env"
+
+    # Ensure shared network exists (allows voice brain to reach text brain)
+    ssh "$REMOTE" "docker network inspect imagineering >/dev/null 2>&1 || docker network create imagineering"
+
+    # Build and start
+    ssh "$REMOTE" "cd ~/apps/embodied-dreamfinder && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+
+    echo "Embodied Dreamfinder deployed!"
+    echo "  URL: https://df.imagineering.cc"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f embodied-dreamfinder'"
 }
 
 deploy_radicale() {
@@ -568,6 +628,91 @@ INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/claudius
     echo "  Check logs: ssh $REMOTE 'docker logs -f claudius'"
 }
 
+deploy_lugh() {
+    echo "Deploying Lugh (historian pen pal agent)..."
+
+    local LUGH_SECRETS="$REPO_ROOT/lugh/secrets.yaml"
+    local LUGH_SRC="$HOME/git/individuals/lowell/lugh"
+
+    # Check for secrets file
+    if [ ! -f "$LUGH_SECRETS" ]; then
+        echo "ERROR: lugh/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i lugh/secrets.yaml"
+        return 1
+    fi
+
+    # Check for source code
+    if [ ! -d "$LUGH_SRC" ]; then
+        echo "ERROR: Lugh source not found at $LUGH_SRC"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$LUGH_SECRETS" | yq -r '"# Lugh Configuration (auto-generated from secrets.yaml)
+CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
+GH_TOKEN=\(.gh_token)
+AGENT_NAME=\(.agent_name)
+MY_EMAIL=\(.my_email)
+PEER_EMAIL=\(.peer_email)
+OWNER_EMAIL=\(.owner_email)
+CC_EMAIL=\(.cc_email)
+IMAP_HOST=\(.imap_host)
+IMAP_PORT=\(.imap_port)
+IMAP_USER=\(.imap_user)
+IMAP_PASS=\(.imap_pass)
+SMTP_HOST=\(.smtp_host)
+SMTP_PORT=\(.smtp_port)
+GIT_USER_NAME=\(.git_user_name)
+GIT_USER_EMAIL=\(.git_user_email)
+JOURNAL_REPO=\(.journal_repo)
+ARCHIVE_REPO=\(.archive_repo)
+ALLOWED_SENDERS=\(.allowed_senders)
+SEND_FIRST=\(.send_first)
+POLL_INTERVAL=\(.poll_interval)
+MODEL=\(.model)
+MAX_TURNS=\(.max_turns)
+WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
+QUOTA_RESET_DAY=\(.quota_reset_day)
+QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
+MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
+REPORT_EVERY_N=\(.report_every_n)
+EVOLUTION_PROBABILITY=\(.evolution_probability)
+EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
+INITIATIVE_PROBABILITY=\(.initiative_probability)
+INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
+INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/lugh/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/lugh/src"
+
+    # Copy docker compose and .env
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/lugh/" "$REMOTE":~/apps/lugh/
+
+    # Copy source code
+    rsync -avz --delete \
+        --exclude '.git' \
+        --exclude 'node_modules' \
+        --exclude '__pycache__' \
+        --exclude '.env' \
+        --exclude '.env.example' \
+        --exclude 'fly.toml' \
+        --exclude 'deploy-fly.sh' \
+        --exclude 'msmtprc' \
+        --exclude '.claude-credentials.json' \
+        --exclude 'playwright-storage.json' \
+        "$LUGH_SRC/" "$REMOTE":~/apps/lugh/src/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/lugh/.env"
+
+    # Build and start
+    ssh "$REMOTE" "cd ~/apps/lugh && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+
+    echo "Lugh deployed!"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f lugh'"
+}
+
 case $SERVICE in
     all)
         deploy_scripts
@@ -615,12 +760,18 @@ case $SERVICE in
     claudius)
         deploy_claudius
         ;;
+    lugh)
+        deploy_lugh
+        ;;
     youtube-rag|rag)
         deploy_youtube_rag
         ;;
+    embodied-dreamfinder|edf|avatar)
+        deploy_embodied_dreamfinder
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|matrix|claudius|youtube-rag|imagineering-contact-us|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site]"
         exit 1
         ;;
 esac

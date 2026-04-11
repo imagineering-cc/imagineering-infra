@@ -1,0 +1,28 @@
+services:
+  app:
+    build:
+      context: ./src
+    container_name: embodied-dreamfinder
+    restart: unless-stopped
+    ports:
+      - "3015:3000"
+    networks:
+      - imagineering
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
+      - KAN_API_KEY=${KAN_API_KEY}
+      - KAN_BOARD_ID=${KAN_BOARD_ID}
+      - OUTLINE_BASE_URL=${OUTLINE_BASE_URL:-https://outline.imagineering.cc/api}
+      - OUTLINE_API_KEY=${OUTLINE_API_KEY:-}
+      - RADICALE_CALENDAR_URL=${RADICALE_CALENDAR_URL:-}
+      - RADICALE_USERNAME=${RADICALE_USERNAME:-}
+      - RADICALE_PASSWORD=${RADICALE_PASSWORD:-}
+      - DREAMFINDER_API_URL=${DREAMFINDER_API_URL:-http://dreamfinder:8081}
+      - DREAMFINDER_API_KEY=${DREAMFINDER_API_KEY:-}
+      - PORT=3000
+
+# Shared network allows voice brain to reach text brain (dreamfinder:8081)
+networks:
+  imagineering:
+    external: true
