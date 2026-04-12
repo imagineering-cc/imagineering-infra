@@ -57,6 +57,12 @@ dreamfinder.imagineering.cc {
     reverse_proxy localhost:8081
 }
 
+# --- Embodied Dreamfinder (voice avatar) ---
+
+df.imagineering.cc {
+    reverse_proxy localhost:3015
+}
+
 # --- YouTube RAG ---
 
 rag.imagineering.cc {
@@ -93,4 +99,16 @@ dav.xdeca.com {
 
 n8n.callonclare.com.au {
     reverse_proxy localhost:5678
+}
+
+# --- Gremlin (Telegram bot webhook) ---
+
+gremlin.xdeca.com {
+    reverse_proxy localhost:8080
+}
+
+# --- Symposium (historical debate system) ---
+
+symposium.imagineering.cc {
+    reverse_proxy localhost:3016
 }
