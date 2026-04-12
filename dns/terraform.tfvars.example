@@ -4,4 +4,4 @@
 namecheap_user   = "your-namecheap-username"
 namecheap_api_key = "your-api-key"
 client_ip         = "your-public-ip"  # Must be whitelisted in Namecheap API settings
-server_ip         = "34.40.229.206"
+server_ip         = "149.118.69.221"
