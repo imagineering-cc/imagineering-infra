@@ -1,0 +1,37 @@
+# LiveKit Server configuration — self-hosted on OCI ARM VPS
+# Docs: https://docs.livekit.io/home/self-hosting/deployment/
+
+port: 7880
+rtc:
+  # UDP port mux: 4 ports minimum (= number of vCPUs)
+  port_range_start: 7882
+  port_range_end: 7892
+  # OCI VMs have internal IPs mapped to external — must use external IP
+  use_external_ip: true
+  # TCP fallback for restrictive firewalls
+  tcp_port: 7881
+
+# Built-in TURN server (no separate coturn needed)
+turn:
+  enabled: true
+  # TURN/TLS on 5349 — looks like HTTPS to corporate firewalls
+  tls_port: 5349
+  # TURN/UDP on 3478 — also serves as STUN
+  udp_port: 3478
+  # Domain for TURN TLS certificate
+  domain: turn.imagineering.cc
+  # Let LiveKit manage the TURN TLS cert via ACME
+  external_tls: false
+
+# API keys — replaced by deploy script from secrets.yaml
+keys:
+  LIVEKIT_API_KEY: LIVEKIT_API_SECRET
+
+# Redis for agent dispatch
+redis:
+  address: 127.0.0.1:6389
+
+# Logging
+logging:
+  level: info
+  json: true

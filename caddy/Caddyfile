@@ -63,6 +63,13 @@ df.imagineering.cc {
     reverse_proxy localhost:3015
 }
 
+# --- LiveKit SFU (self-hosted WebRTC) ---
+# Signaling endpoint — WebSocket upgrade required for LiveKit clients/agents
+
+livekit.imagineering.cc {
+    reverse_proxy localhost:7880
+}
+
 # --- YouTube RAG ---
 
 rag.imagineering.cc {
