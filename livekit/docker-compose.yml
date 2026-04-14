@@ -1,0 +1,34 @@
+# LiveKit SFU — self-hosted WebRTC media server
+#
+# Uses host networking for WebRTC UDP media (same pattern as Caddy).
+# Caddy handles TLS termination for the signaling endpoint (7880).
+# UDP ports 7882-7892 handle WebRTC media via port muxing.
+# Built-in TURN server on 3478 (UDP) and 5349 (TCP/TLS).
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    command: --config /etc/livekit.yaml
+
+  # Redis for agent dispatch coordination
+  redis:
+    image: redis:7-alpine
+    container_name: livekit-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6389:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis_data:

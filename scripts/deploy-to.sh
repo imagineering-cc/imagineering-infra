@@ -368,7 +368,10 @@ RADICALE_CALENDAR_URL=\(.radicale_calendar_url)
 RADICALE_USERNAME=\(.radicale_username)
 RADICALE_PASSWORD=\(.radicale_password)
 DREAMFINDER_API_URL=\(.dreamfinder_api_url)
-DREAMFINDER_API_KEY=\(.dreamfinder_api_key)"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+DREAMFINDER_API_KEY=\(.dreamfinder_api_key)
+LIVEKIT_URL=\(.livekit_url)
+LIVEKIT_API_KEY=\(.livekit_api_key)
+LIVEKIT_API_SECRET=\(.livekit_api_secret)"' > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
@@ -391,6 +394,105 @@ DREAMFINDER_API_KEY=\(.dreamfinder_api_key)"' > "$REPO_ROOT/embodied-dreamfinder
     echo "Embodied Dreamfinder deployed!"
     echo "  URL: https://df.imagineering.cc"
     echo "  Check logs: ssh $REMOTE 'docker logs -f embodied-dreamfinder'"
+}
+
+deploy_livekit() {
+    echo "Deploying LiveKit SFU (self-hosted WebRTC)..."
+
+    local LK_SECRETS="$REPO_ROOT/livekit/secrets.yaml"
+
+    if [ ! -f "$LK_SECRETS" ]; then
+        echo "ERROR: livekit/secrets.yaml not found"
+        echo "Create from secrets.yaml.example and encrypt with: sops -e -i livekit/secrets.yaml"
+        return 1
+    fi
+
+    # Read secrets
+    local API_KEY API_SECRET EXTERNAL_IP
+    API_KEY=$(sops -d "$LK_SECRETS" | yq -r '.livekit_api_key')
+    API_SECRET=$(sops -d "$LK_SECRETS" | yq -r '.livekit_api_secret')
+    EXTERNAL_IP=$(sops -d "$LK_SECRETS" | yq -r '.external_ip')
+
+    # Generate livekit.yaml with real credentials and IP
+    sed -e "s/LIVEKIT_API_KEY/$API_KEY/" \
+        -e "s/LIVEKIT_API_SECRET/$API_SECRET/" \
+        "$REPO_ROOT/livekit/livekit.yaml" > "$REPO_ROOT/livekit/livekit-generated.yaml"
+
+    # Inject node_ip if external IP is set
+    if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+        sed -i'' -e "/use_external_ip: true/a\\
+  node_ip: $EXTERNAL_IP" "$REPO_ROOT/livekit/livekit-generated.yaml"
+    fi
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/livekit"
+    rsync -avz "$REPO_ROOT/livekit/docker-compose.yml" "$REMOTE":~/apps/livekit/
+    rsync -avz "$REPO_ROOT/livekit/livekit-generated.yaml" "$REMOTE":~/apps/livekit/livekit.yaml
+
+    # Clean up generated config
+    rm -f "$REPO_ROOT/livekit/livekit-generated.yaml"
+
+    # Open firewall ports (OCI uses iptables — these may already be open)
+    echo "Reminder: Ensure OCI security list allows:"
+    echo "  - TCP 7881 (WebRTC TCP fallback)"
+    echo "  - UDP 3478 (TURN/STUN)"
+    echo "  - TCP 5349 (TURN/TLS)"
+    echo "  - UDP 7882-7892 (WebRTC media)"
+
+    # Pull and start
+    ssh "$REMOTE" "cd ~/apps/livekit && docker compose pull && docker compose up -d"
+
+    echo "LiveKit SFU deployed!"
+    echo "  Signaling: https://livekit.imagineering.cc"
+    echo "  TURN: turn.imagineering.cc:5349"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f livekit'"
+}
+
+deploy_tech_world_bots() {
+    echo "Deploying Tech World bots (Clawd, Gremlin, Dreamfinder)..."
+
+    local TWB_SECRETS="$REPO_ROOT/tech-world-bots/secrets.yaml"
+    local TWB_SRC="$HOME/git/orgs/enspyrco/adventures-in/tech_world_bot"
+
+    if [ ! -f "$TWB_SECRETS" ]; then
+        echo "ERROR: tech-world-bots/secrets.yaml not found"
+        echo "Create from secrets.yaml.example and encrypt with: sops -e -i tech-world-bots/secrets.yaml"
+        return 1
+    fi
+
+    if [ ! -d "$TWB_SRC" ]; then
+        echo "ERROR: tech_world_bot source not found at $TWB_SRC"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$TWB_SECRETS" | yq -r '"LIVEKIT_URL=\(.livekit_url)
+LIVEKIT_API_KEY=\(.livekit_api_key)
+LIVEKIT_API_SECRET=\(.livekit_api_secret)
+ANTHROPIC_API_KEY=\(.anthropic_api_key)
+OPENAI_API_KEY=\(.openai_api_key)
+KAN_BASE_URL=\(.kan_base_url)
+KAN_API_KEY=\(.kan_api_key)
+KAN_BOARD_ID=\(.kan_board_id)
+OUTLINE_BASE_URL=\(.outline_base_url)
+OUTLINE_API_KEY=\(.outline_api_key)"' > "$REPO_ROOT/tech-world-bots/.env"
+
+    # Deploy files
+    ssh "$REMOTE" "mkdir -p ~/apps/tech-world-bots/src"
+
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/tech-world-bots/" "$REMOTE":~/apps/tech-world-bots/
+
+    rsync -avz --delete --exclude 'node_modules' --exclude '.env' --exclude '.git' --exclude 'dist' "$TWB_SRC/" "$REMOTE":~/apps/tech-world-bots/src/
+
+    rm -f "$REPO_ROOT/tech-world-bots/.env"
+
+    # Build and start all three bots
+    ssh "$REMOTE" "cd ~/apps/tech-world-bots && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+
+    echo "Tech World bots deployed!"
+    echo "  Containers: tw-clawd, tw-gremlin, tw-dreamfinder"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f tw-dreamfinder'"
 }
 
 deploy_radicale() {
@@ -769,9 +871,15 @@ case $SERVICE in
     embodied-dreamfinder|edf|avatar)
         deploy_embodied_dreamfinder
         ;;
+    livekit)
+        deploy_livekit
+        ;;
+    tech-world-bots|twb)
+        deploy_tech_world_bots
+        ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site]"
         exit 1
         ;;
 esac
