@@ -11,12 +11,77 @@ The catch? Everyone wants one, so they're almost always "out of capacity." Hence
 │  Oracle Cloud Always Free ARM Instance  │
 │                                         │
 │  • 4 OCPU (ARM cores) / 24GB RAM       │
-│  • 50GB boot disk                       │
+│  • Up to 200GB disk                     │
 │  • Ubuntu 24.04                         │
 │  • Public IP address                    │
 │  • Actually free. Forever. Not a trial. │
 └─────────────────────────────────────────┘
 ```
+
+But the ARM instance is just the headliner. The Always Free tier comes with a lot more that most people never discover.
+
+### The Full Always Free Inventory
+
+**Compute** — 4.25 CPUs and 26 GB RAM total, across two separate CPU budgets:
+
+| Shape | CPUs | RAM | Max Instances | Notes |
+|-------|------|-----|---------------|-------|
+| VM.Standard.A1.Flex (Arm) | 4 OCPUs | 24 GB | 4 | Ampere Altra 3 GHz. Split OCPUs and RAM however you want across instances |
+| VM.Standard.E2.1.Micro (AMD x86) | 1/8 OCPU each | 1 GB each | 2 | **Independent CPU budget** — doesn't touch the Arm allocation. Burstable above baseline |
+
+The Micro instances are the sleeper pick. They run on completely different x86 hardware, so you're getting extra compute on top of the 4 Arm cores. Each gets its own public IP and 50 Mbps internet bandwidth. Good for monitoring, cron runners, small proxies, or a Tailscale exit node.
+
+**Storage:**
+
+| Resource | Limit |
+|----------|-------|
+| Boot + block volumes | 200 GB total (home region only) |
+| Volume backups | 5 |
+| Object Storage | 20 GB + 50K API calls/month (S3-compatible) |
+
+The boot volume defaults to 50 GB but you can resize it online up to 200 GB at any time. No reboot needed — just `growpart` + `resize2fs` after the OCI resize completes.
+
+**Managed Databases** (if you don't want to self-host):
+
+| Service | Limit |
+|---------|-------|
+| Autonomous Database (Oracle) | 2 instances — 1 OCPU + 20 GB each |
+| MySQL HeatWave | 1 node — 50 GB data + 50 GB backup |
+| NoSQL Database | 3 tables × 25 GB, 133M reads+writes/month |
+
+**Networking:**
+
+| Resource | Limit |
+|----------|-------|
+| VCNs | 2 |
+| Flexible Load Balancer (L7) | 1 — 10 Mbps, 16 listeners, 1024 backends |
+| Network Load Balancer (L4) | 1 — 50 listeners, 1024 backends |
+| Site-to-Site VPN | 50 IPSec connections |
+| Outbound data transfer | 10 TB/month |
+| VCN Flow Logs | 10 GB/month |
+| Bastion (managed SSH jump host) | Free, no stated limit |
+
+10 TB/month outbound is insane — AWS charges ~$0.09/GB for egress, so that's ~$900/month worth of data transfer, free.
+
+**Observability & Messaging:**
+
+| Resource | Limit |
+|----------|-------|
+| Email Delivery | 3,000 emails/month |
+| Monitoring | 500M ingestion + 1B retrieval data points |
+| Notifications | 1M HTTPS + 1K email per month |
+| APM | 1,000 tracing events/month + 10 synthetic runs/hour |
+
+**Security:**
+
+| Resource | Limit |
+|----------|-------|
+| Vault (KMS) | Unlimited software keys, 20 HSM keys, 150 secrets |
+| Certificates | 5 CAs + 150 certs |
+
+> **The one rule:** all resources must be in your **home region** to stay free. Pick your region carefully at signup — you can't change it later.
+
+---
 
 ## What You'll Need
 
@@ -36,6 +101,16 @@ Pick a **Home Region** close to you — this matters because Always Free resourc
 > **Pro tip:** Less popular regions (like Melbourne or Sydney) tend to have more capacity than US regions. Pick somewhere not everyone else is picking.
 
 Once you're in, consider upgrading to **Pay As You Go (PAYG)**. This does NOT mean you'll be charged — Always Free resources stay free. But PAYG accounts get priority for capacity, which dramatically improves your chances. Our Sydney instance provisioned within minutes of upgrading to PAYG.
+
+To upgrade:
+
+1. Log in to [cloud.oracle.com](https://cloud.oracle.com)
+2. Open the **hamburger menu** (top-left) → **Billing & Cost Management** → **Upgrade and Manage Payment**
+3. Click **Upgrade to Pay As You Go**
+4. Add a credit/debit card (required for verification — you won't be charged for Always Free resources)
+5. Accept the terms and confirm
+
+The upgrade takes effect immediately.
 
 ---
 

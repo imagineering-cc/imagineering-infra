@@ -309,7 +309,12 @@ LOG_LEVEL=\(.log_level)
 API_KEY=\(.api_key)
 LIVEKIT_URL=\(.livekit_url)
 LIVEKIT_API_KEY=\(.livekit_api_key)
-LIVEKIT_API_SECRET=\(.livekit_api_secret)"' > "$REPO_ROOT/dreamfinder/.env"
+LIVEKIT_API_SECRET=\(.livekit_api_secret)
+ADMIN_IDS=\(.admin_ids)
+MATRIX_ALWAYS_RESPOND_ROOMS=\(.matrix_always_respond_rooms)
+CALENDAR_URL=\(.calendar_url)
+EVENT_TIMEZONE=\(.event_timezone)
+DEPLOY_ANNOUNCE_GROUP_ID=\(.deploy_announce_group_id)"' > "$REPO_ROOT/dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder/src"
