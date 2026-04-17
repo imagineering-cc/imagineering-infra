@@ -1,0 +1,45 @@
+# Tech World bots — all three run from the same image, differentiated by BOT_NAME.
+# Migrated from Cloud Run to OCI for always-on (no cold starts).
+
+services:
+  clawd:
+    build:
+      context: ./src
+    container_name: tw-clawd
+    restart: unless-stopped
+    environment:
+      - BOT_NAME=clawd
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+  gremlin:
+    build:
+      context: ./src
+    container_name: tw-gremlin
+    restart: unless-stopped
+    environment:
+      - BOT_NAME=gremlin
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+  dreamfinder:
+    build:
+      context: ./src
+    container_name: tw-dreamfinder
+    restart: unless-stopped
+    environment:
+      - BOT_NAME=dreamfinder
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # DF's voice tools talk to the Imagineering services on OCI
+      - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
+      - KAN_API_KEY=${KAN_API_KEY:-}
+      - KAN_BOARD_ID=${KAN_BOARD_ID:-}
+      - OUTLINE_BASE_URL=${OUTLINE_BASE_URL:-https://outline.imagineering.cc/api}
+      - OUTLINE_API_KEY=${OUTLINE_API_KEY:-}

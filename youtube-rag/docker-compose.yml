@@ -1,0 +1,68 @@
+# YouTube RAG — VPS deployment
+#
+# Services:
+#   embedding-server — EmbeddingGemma-300M on CPU (ARM)
+#   backend          — FastAPI app
+#   frontend         — Next.js UI
+#   chroma           — ChromaDB vector store
+#
+# Usage (via deploy-to.sh):
+#   ./scripts/deploy-to.sh 149.118.69.221 youtube-rag
+#
+# Access:
+#   Frontend: http://localhost:3010 (behind Caddy → rag.imagineering.cc)
+#   Backend:  http://localhost:8010 (behind Caddy → rag-api.imagineering.cc)
+
+services:
+  embedding-server:
+    build:
+      context: ./src
+      dockerfile: Dockerfile.embeddings
+    volumes:
+      - embedding-cache:/app/cache
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  chroma:
+    image: chromadb/chroma:latest
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+    ports:
+      - "8010:8000"
+    env_file: .env
+    environment:
+      - EMBEDDING_SERVER_URL=http://embedding-server:8100
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - SQLITE_PATH=/app/data/youtube_rag.db
+    volumes:
+      - backend-data:/app/data
+    depends_on:
+      - embedding-server
+      - chroma
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=https://rag-api.imagineering.cc
+    ports:
+      - "3010:3000"
+    restart: unless-stopped
+
+volumes:
+  embedding-cache:
+  chroma-data:
+  backend-data:

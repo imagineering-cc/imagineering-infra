@@ -1,0 +1,24 @@
+# Lugh — Lowell's AI historian pen pal.
+#
+# Source is rsynced from ~/git/individuals/lowell/lugh/
+# by deploy-to.sh. This file lives in imagineering-infra for consistent deployment.
+#
+# Deploy: ./scripts/deploy-to.sh 149.118.69.221 lugh
+
+services:
+  lugh:
+    build:
+      context: ./src
+    container_name: lugh
+    restart: unless-stopped
+    env_file: .env
+    shm_size: '256m'
+    volumes:
+      - lugh_logs:/workspace/logs
+      - lugh_repos:/workspace/repos
+      - lugh_attachments:/workspace/attachments
+
+volumes:
+  lugh_logs:
+  lugh_repos:
+  lugh_attachments:

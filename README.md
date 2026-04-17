@@ -16,7 +16,7 @@ Infrastructure monorepo for self-hosted services.
 
 | Provider | Status | IP | Cost |
 |----------|--------|-----|------|
-| OCI (Oracle Cloud) | **Active** | 149.118.69.221 | Free tier |
+| OCI (Oracle Cloud) | **Active** | 149.118.69.221 | Free tier (200 GB disk, 4 OCPU, 24 GB RAM) |
 
 ## Architecture
 

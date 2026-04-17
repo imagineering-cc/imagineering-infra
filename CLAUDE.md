@@ -153,7 +153,76 @@ Daily backups to GitHub (imagineering-cc/imagineering-backups).
 
 | Provider | Status | IP | Cost |
 |----------|--------|-----|------|
-| OCI (Oracle Cloud) | Active | 149.118.69.221 | Free tier |
+| OCI (Oracle Cloud) | Active | 149.118.69.221 | Free tier (200 GB disk, 4 OCPU, 24 GB RAM) |
+
+### OCI Always Free Tier — Full Inventory
+
+Everything runs on Oracle Cloud's Always Free tier — no billing, no trial expiry. All resources must be in the **home region** (ap-sydney-1) to stay free.
+
+**Reference:** [OCI Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+
+#### Compute
+
+| Shape | OCPUs | RAM | Instances | Notes |
+|-------|-------|-----|-----------|-------|
+| VM.Standard.A1.Flex (Arm) | 4 total | 24 GB total | Up to 4 | Ampere Altra 3 GHz. OCPU/RAM ratio is flexible — allocate independently |
+| VM.Standard.E2.1.Micro (AMD x86) | 1/8 each (burstable) | 1 GB each | Up to 2 | **Separate CPU budget** — does not eat into A1 allocation. Can burst above baseline |
+
+Total baseline: **4.25 OCPUs + 26 GB RAM** across up to 6 instances.
+
+**Current usage:** 1× A1.Flex (4 OCPU, 24 GB) = imagineering-syd. 0× E2.1.Micro (2 available).
+
+#### Storage
+
+| Resource | Limit | Current |
+|----------|-------|---------|
+| Boot + block volumes | 200 GB total | 200 GB (1 boot volume) |
+| Volume backups | 5 | - |
+| Object Storage | 20 GB + 50K API calls/mo | Not used (MinIO self-hosted instead) |
+
+Boot volume can be resized online — grow partition with `growpart` + `resize2fs`, no reboot needed.
+
+#### Databases (managed, not currently used)
+
+| Service | Limit | Potential use |
+|---------|-------|---------------|
+| Autonomous Database (Oracle) | 2 instances, 1 OCPU + 20 GB each | Could replace self-managed Postgres — but requires Oracle SQL, no Postgres wire compat |
+| MySQL HeatWave | 1 node, 50 GB data + 50 GB backup | Managed MySQL with analytics engine |
+| NoSQL Database | 3 tables × 25 GB, 133M reads+writes/mo | High-throughput key-value store |
+
+#### Networking
+
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| VCNs | 2 | Currently using 1 |
+| Flexible Load Balancer | 1 (10 Mbps, 16 listeners/backend sets) | L7 — could front Caddy for health checks |
+| Network Load Balancer | 1 (50 listeners, 1024 backends) | L4 — TCP/UDP load balancing |
+| Site-to-Site VPN | 50 IPSec connections | Free VPN tunnels to home/other sites |
+| Outbound data | 10 TB/month | AWS charges ~$0.09/GB for this |
+| VCN Flow Logs | 10 GB/month | Network traffic logging |
+| Bastion | Free, no stated limit | Managed SSH jump host — avoids exposing SSH directly |
+
+#### Observability & Messaging
+
+| Resource | Limit | Potential use |
+|----------|-------|---------------|
+| Email Delivery | 3,000 emails/month | Could replace Brevo for Outline's transactional email |
+| Monitoring | 500M ingestion + 1B retrieval data points | Free metrics/alerting (Datadog-lite) |
+| Notifications | 1M HTTPS + 1K email per month | Webhook/email alerts on events |
+| APM | 1,000 tracing events/mo + 10 synthetic runs/hr | Application performance monitoring |
+| Connector Hub | 2 connectors | Pipe events between OCI services |
+
+#### Security
+
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| Vault (KMS) | Unlimited software keys, 20 HSM keys, 150 secrets | Could replace SOPS for secrets management |
+| Certificates | 5 CAs + 150 certs | Free cert management (Caddy already handles Let's Encrypt) |
+
+#### OCIDs
+
+- Instance: `ocid1.instance.oc1.ap-sydney-1.anzxsljr5jyppsicpdt4ecunqcvoxmvhauzsq5co53joaumapptj3ktxoqhq`
+- Boot volume: `ocid1.bootvolume.oc1.ap-sydney-1.abzxsljrvp4mpltca5qqqt3qldbs252qlqp35hr6ydsdvew2ch444zmcqakq`
 
 ## Secrets Management
 
