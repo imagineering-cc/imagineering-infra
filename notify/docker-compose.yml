@@ -1,0 +1,12 @@
+services:
+  notify:
+    build: .
+    container_name: notify
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - NOTIFY_API_KEY=${NOTIFY_API_KEY}
+      - PORT=8090
+    ports:
+      - "127.0.0.1:8090:8090"

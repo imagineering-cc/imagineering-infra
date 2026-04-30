@@ -106,6 +106,33 @@ deploy_service() {
     ssh "$REMOTE" "cd ~/apps/$svc && docker compose pull && docker compose up -d"
 }
 
+deploy_notify() {
+    echo "Deploying notify (Telegram notify proxy)..."
+
+    local NOTIFY_SECRETS="$REPO_ROOT/notify/secrets.yaml"
+    if [ ! -f "$NOTIFY_SECRETS" ]; then
+        echo "ERROR: notify/secrets.yaml not found"
+        echo "Create from notify/secrets.yaml.example and encrypt with: sops -e -i notify/secrets.yaml"
+        return 1
+    fi
+
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$NOTIFY_SECRETS" | yq -r '"TELEGRAM_BOT_TOKEN=\(.telegram_bot_token)
+TELEGRAM_CHAT_ID=\(.telegram_chat_id)
+NOTIFY_API_KEY=\(.notify_api_key)"' > "$REPO_ROOT/notify/.env"
+
+    ssh "$REMOTE" "mkdir -p ~/apps/notify"
+    rsync -avz --delete --exclude 'secrets.yaml' --exclude '.gitignore' "$REPO_ROOT/notify/" "$REMOTE":~/apps/notify/
+
+    rm -f "$REPO_ROOT/notify/.env"
+
+    ssh "$REMOTE" "cd ~/apps/notify && docker compose build && docker compose up -d"
+
+    echo "notify deployed!"
+    echo "  Endpoint: https://notify.imagineering.cc"
+    echo "  Health:   curl https://notify.imagineering.cc/health"
+}
+
 deploy_backups() {
     echo "Deploying backup configuration..."
 
@@ -881,6 +908,9 @@ case $SERVICE in
         ;;
     tech-world-bots|twb)
         deploy_tech_world_bots
+        ;;
+    notify)
+        deploy_notify
         ;;
     *)
         echo "Unknown service: $SERVICE"
