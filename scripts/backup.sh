@@ -145,8 +145,27 @@ backup_downstream_server() {
 
   # Use the SQLite .backup command for a consistent online snapshot
   # (safe to run while the server is writing to the DB).
-  if ! sqlite3 "$db_path" ".backup '$backup_file'"; then
-    error "sqlite3 .backup failed for downstream-server"
+  #
+  # Retry with a 5s busy-timeout because the live container's WAL-mode DB
+  # can hold a brief write lock during a transaction — a one-shot call
+  # races and fails with "database is locked" intermittently. A silent
+  # missed nightly backup is much worse than a noisy retry. Same pattern
+  # as scripts/reconcile-downstream.sh.
+  local snapshot_ok=0
+  local err_file="/tmp/downstream-backup-snap-err.$$"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if sqlite3 -cmd ".timeout 5000" "$db_path" ".backup '$backup_file'" 2>"$err_file"; then
+      snapshot_ok=1
+      break
+    fi
+    error "downstream-server snapshot attempt $attempt failed: $(cat "$err_file" 2>/dev/null)"
+    rm -f "$backup_file"
+    sleep 3
+  done
+  rm -f "$err_file"
+  if [ "$snapshot_ok" -ne 1 ]; then
+    error "sqlite3 .backup failed for downstream-server after 5 attempts"
     return 1
   fi
 
