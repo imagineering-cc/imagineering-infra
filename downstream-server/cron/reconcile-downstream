@@ -7,6 +7,11 @@
 #
 # Output is appended to /home/nick/logs/reconcile-downstream.log and
 # rotated weekly by /etc/logrotate.d/reconcile-downstream.
+#
+# Telegram alert env vars (TELEGRAM_BOT_TOKEN/CHAT_ID/THREAD_ID) are
+# templated in by deploy_downstream_reconciler in scripts/deploy-to.sh
+# from backups/secrets.yaml — see that function for the template variant
+# of this file.
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

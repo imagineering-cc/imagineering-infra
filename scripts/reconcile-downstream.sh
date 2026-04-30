@@ -51,7 +51,41 @@ DB_LIVE="/home/nick/apps/downstream-server/data/downstream.db"
 DB_SNAPSHOT="/tmp/downstream-reconcile-$$.db"
 SOURCE_DIR="/home/nick/apps/downstream-server/source"
 PUB_CACHE_VOLUME="downstream-reconcile-pub-cache"
-DART_IMAGE="dart:stable"
+# Pinned Dart SDK tag (was `dart:stable`). The reconciler script lives outside
+# the downstream monorepo, so `:stable` is a silent moving target — a future
+# major bump could break the run mid-night with no signal until the Telegram
+# alert fires. Pin to a known-good tag matching downstream's
+# `environment.sdk: ^3.5.0` constraint. Bump deliberately when the server's
+# own Dockerfile bumps.
+DART_IMAGE="dart:3.11.5"
+
+# Telegram alert config (optional). Cron call-site exports these env vars
+# from sops-encrypted backups/secrets.yaml; if absent, alerts are skipped.
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+TELEGRAM_THREAD_ID="${TELEGRAM_THREAD_ID:-}"
+
+# Send a Telegram alert. Mirrors the helper in scripts/backup.sh and
+# scripts/health-check.sh. Silent no-op if creds are not configured so a
+# missing-secret deploy doesn't turn into a daily cron error spam.
+send_telegram_alert() {
+  local message="$1"
+  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+    echo "Telegram alert skipped (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)"
+    return 0
+  fi
+  local -a args=(
+    -s -X POST
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+    -d "chat_id=$TELEGRAM_CHAT_ID"
+    -d "parse_mode=HTML"
+    --data-urlencode "text=$message"
+  )
+  if [ -n "$TELEGRAM_THREAD_ID" ]; then
+    args+=(-d "message_thread_id=$TELEGRAM_THREAD_ID")
+  fi
+  curl "${args[@]}" > /dev/null 2>&1 || true
+}
 
 # Forwarded to the Dart script. Override at the cron call-site or env.
 RECONCILE_ARGS="${RECONCILE_ARGS:-}"
@@ -124,4 +158,18 @@ EOF
 status=$?
 
 echo "=== reconcile-downstream done (exit=$status) ==="
+
+# Alert on data-integrity issues (exit 1 from bin/reconcile_b2.dart). Other
+# non-zero exits (snapshot failure, transient probe failure with --strict,
+# bad args, container/setup error) also warrant a heads-up — silent failure
+# of the only catch-all consistency check is worse than a noisy ping. The
+# tail of the log file is included so the alert is actionable from a phone.
+if [ $status -ne 0 ]; then
+  log_tail=""
+  if [ -f /home/nick/logs/reconcile-downstream.log ]; then
+    log_tail=$(tail -n 20 /home/nick/logs/reconcile-downstream.log 2>/dev/null | head -c 2000)
+  fi
+  send_telegram_alert "$(printf '<b>downstream reconcile alert</b>\nexit=%s (1=data integrity, 3=strict transient, other=setup)\n<pre>%s</pre>' "$status" "$log_tail")"
+fi
+
 exit $status

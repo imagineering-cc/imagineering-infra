@@ -49,15 +49,18 @@ deploy_scripts() {
 
 deploy_downstream_reconciler() {
     # Install the nightly reconcile_b2 cron + logrotate config on the host.
-    # Reads no secrets — the cron script reaches into the rsynced server
-    # source tree and runs the Dart script in a one-shot dart:stable
-    # container. `deploy_scripts` is responsible for placing the cron's
-    # invoking script in /opt/scripts/; this function only owns the cron +
-    # logrotate wiring.
+    # `deploy_scripts` is responsible for placing the cron's invoking script
+    # in /opt/scripts/; this function only owns the cron + logrotate wiring.
+    #
+    # Templates Telegram alert env vars from backups/secrets.yaml into the
+    # cron entry (mirrors the health-check pattern in deploy_scripts) so the
+    # reconciler can ping on data-integrity findings. Falls back to the
+    # alert-less cron if the secrets file is absent or empty.
     echo "Setting up downstream reconcile_b2 nightly cron..."
 
     local CRON_SRC="$REPO_ROOT/downstream-server/cron/reconcile-downstream"
     local LOGROTATE_SRC="$REPO_ROOT/downstream-server/logrotate/reconcile-downstream"
+    local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
 
     if [ ! -f "$CRON_SRC" ] || [ ! -f "$LOGROTATE_SRC" ]; then
         echo "ERROR: reconcile cron/logrotate sources missing in $REPO_ROOT/downstream-server/"
@@ -65,11 +68,37 @@ deploy_downstream_reconciler() {
     fi
 
     ssh "$REMOTE" "mkdir -p ~/logs"
-    scp "$CRON_SRC" "$REMOTE":/tmp/reconcile-downstream.cron
+
+    # Build the cron file locally, optionally injecting Telegram env vars
+    # before the cron entry's `nick` user field.
+    local CRON_TMP
+    CRON_TMP=$(mktemp)
+    if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
+        local BOT_TOKEN CHAT_ID THREAD_ID
+        BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
+        CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
+        THREAD_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_thread_id')
+        if [ -n "$BOT_TOKEN" ] && [ "$BOT_TOKEN" != "null" ]; then
+            echo "  Templating Telegram credentials into reconcile cron..."
+            # Replace the bare cron line with one carrying inline env vars.
+            # Match the line that begins with the schedule + ` nick `.
+            sed -e "s|^\(15 4 \* \* \*\) nick |\1 nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=$CHAT_ID TELEGRAM_THREAD_ID=$THREAD_ID |" \
+                "$CRON_SRC" > "$CRON_TMP"
+        else
+            cp "$CRON_SRC" "$CRON_TMP"
+            echo "  NOTE: Telegram secrets present but empty — reconciler alerts disabled"
+        fi
+    else
+        cp "$CRON_SRC" "$CRON_TMP"
+        echo "  NOTE: No Telegram credentials in backups/secrets.yaml — reconciler alerts disabled"
+    fi
+
+    scp "$CRON_TMP" "$REMOTE":/tmp/reconcile-downstream.cron
     scp "$LOGROTATE_SRC" "$REMOTE":/tmp/reconcile-downstream.logrotate
     ssh "$REMOTE" "sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.cron /etc/cron.d/reconcile-downstream && \
         sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.logrotate /etc/logrotate.d/reconcile-downstream && \
         rm -f /tmp/reconcile-downstream.cron /tmp/reconcile-downstream.logrotate"
+    rm -f "$CRON_TMP"
 
     echo "Reconcile cron installed (daily 04:15, logs at /home/nick/logs/reconcile-downstream.log)"
 }
