@@ -22,8 +22,30 @@
 #   /opt/scripts/reconcile-downstream.sh
 # Tail the latest run:
 #   tail -f /home/nick/logs/reconcile-downstream.log
+#
+# RECONCILE_ARGS is forwarded into a `bash -c` and word-split by the inner
+# shell. Flags + integers + URLs without spaces are fine (the current usage).
+# Args containing spaces are not supported — pass them through a wrapper if
+# you ever need that.
 
+# `set -e` is deliberately omitted so the snapshot retry loop and the final
+# `docker run` can return non-zero without aborting the script before we
+# capture the exit code into `$status` for the caller.
 set -uo pipefail
+
+# Singleton guard: prevent two cron-triggered runs from overlapping (e.g.
+# if a long reconcile against a slow CDN bleeds past 24h). The second run
+# exits silently with status 0 — overlap is not an error condition, just
+# a no-op.
+LOCKFILE="/var/lock/reconcile-downstream.lock"
+exec 9>"$LOCKFILE" 2>/dev/null || {
+  echo "ERROR: cannot open lockfile $LOCKFILE" >&2
+  exit 12
+}
+if ! flock -n 9; then
+  echo "$(date -Iseconds): another reconcile run is in progress, skipping"
+  exit 0
+fi
 
 DB_LIVE="/home/nick/apps/downstream-server/data/downstream.db"
 DB_SNAPSHOT="/tmp/downstream-reconcile-$$.db"
