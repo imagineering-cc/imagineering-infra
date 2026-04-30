@@ -1,0 +1,14 @@
+# Nightly reconciler for downstream-server.
+# Installed at /etc/cron.d/reconcile-downstream by deploy_downstream_reconciler.
+#
+# Runs at 04:15 daily — staggered 15 minutes after the 04:00 backup cron
+# (see deploy_backups in scripts/deploy-to.sh) so the two don't fight over
+# the SQLite snapshot path or load the box at the same moment.
+#
+# Output is appended to /home/nick/logs/reconcile-downstream.log and
+# rotated weekly by /etc/logrotate.d/reconcile-downstream.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+15 4 * * * nick /opt/scripts/reconcile-downstream.sh >> /home/nick/logs/reconcile-downstream.log 2>&1

@@ -47,6 +47,33 @@ deploy_scripts() {
     echo "Scripts deployed to /opt/scripts/"
 }
 
+deploy_downstream_reconciler() {
+    # Install the nightly reconcile_b2 cron + logrotate config on the host.
+    # Reads no secrets — the cron script reaches into the rsynced server
+    # source tree and runs the Dart script in a one-shot dart:stable
+    # container. `deploy_scripts` is responsible for placing the cron's
+    # invoking script in /opt/scripts/; this function only owns the cron +
+    # logrotate wiring.
+    echo "Setting up downstream reconcile_b2 nightly cron..."
+
+    local CRON_SRC="$REPO_ROOT/downstream-server/cron/reconcile-downstream"
+    local LOGROTATE_SRC="$REPO_ROOT/downstream-server/logrotate/reconcile-downstream"
+
+    if [ ! -f "$CRON_SRC" ] || [ ! -f "$LOGROTATE_SRC" ]; then
+        echo "ERROR: reconcile cron/logrotate sources missing in $REPO_ROOT/downstream-server/"
+        return 1
+    fi
+
+    ssh "$REMOTE" "mkdir -p ~/logs"
+    scp "$CRON_SRC" "$REMOTE":/tmp/reconcile-downstream.cron
+    scp "$LOGROTATE_SRC" "$REMOTE":/tmp/reconcile-downstream.logrotate
+    ssh "$REMOTE" "sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.cron /etc/cron.d/reconcile-downstream && \
+        sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.logrotate /etc/logrotate.d/reconcile-downstream && \
+        rm -f /tmp/reconcile-downstream.cron /tmp/reconcile-downstream.logrotate"
+
+    echo "Reconcile cron installed (daily 04:15, logs at /home/nick/logs/reconcile-downstream.log)"
+}
+
 deploy_site() {
     local SITE_SRC="$HOME/git/orgs/imagineering/website"
 
@@ -911,6 +938,9 @@ case $SERVICE in
         ;;
     notify)
         deploy_notify
+        ;;
+    downstream-reconciler|reconciler)
+        deploy_downstream_reconciler
         ;;
     *)
         echo "Unknown service: $SERVICE"
