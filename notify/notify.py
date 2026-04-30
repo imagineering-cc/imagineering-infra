@@ -20,6 +20,7 @@ All secrets come from env vars:
 """
 import json
 import os
+import secrets
 import sys
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -50,13 +51,16 @@ class NotifyHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         auth = self.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[len("Bearer "):] != API_KEY:
+        if not auth.startswith("Bearer ") or not secrets.compare_digest(auth.removeprefix("Bearer "), API_KEY):
             self._reply(401, {"error": "unauthorized"})
             return
         if self.path != "/send":
             self._reply(404, {"error": "not found"})
             return
         length = int(self.headers.get("Content-Length", "0"))
+        if length > 16384:
+            self._reply(413, {"error": "payload too large"})
+            return
         try:
             payload = json.loads(self.rfile.read(length).decode() or "{}")
         except json.JSONDecodeError:

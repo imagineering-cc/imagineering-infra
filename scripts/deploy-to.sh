@@ -122,7 +122,7 @@ TELEGRAM_CHAT_ID=\(.telegram_chat_id)
 NOTIFY_API_KEY=\(.notify_api_key)"' > "$REPO_ROOT/notify/.env"
 
     ssh "$REMOTE" "mkdir -p ~/apps/notify"
-    rsync -avz --delete --exclude 'secrets.yaml' --exclude '.gitignore' "$REPO_ROOT/notify/" "$REMOTE":~/apps/notify/
+    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/notify/" "$REMOTE":~/apps/notify/
 
     rm -f "$REPO_ROOT/notify/.env"
 
