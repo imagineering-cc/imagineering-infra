@@ -1,0 +1,9 @@
+/home/nick/logs/reconcile-downstream.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 nick nick
+}
