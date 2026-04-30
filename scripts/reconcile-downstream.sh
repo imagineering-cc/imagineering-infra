@@ -167,7 +167,13 @@ echo "=== reconcile-downstream done (exit=$status) ==="
 if [ $status -ne 0 ]; then
   log_tail=""
   if [ -f /home/nick/logs/reconcile-downstream.log ]; then
-    log_tail=$(tail -n 20 /home/nick/logs/reconcile-downstream.log 2>/dev/null | head -c 2000)
+    # Escape HTML special chars so Telegram's HTML parser doesn't choke on
+    # log content containing <, >, or & (paths, stderr from sub-commands,
+    # Dart stack frames). Without this, the alert silently fails to send
+    # exactly when we most need it. Order matters: & must be escaped first.
+    log_tail=$(tail -n 20 /home/nick/logs/reconcile-downstream.log 2>/dev/null \
+      | head -c 2000 \
+      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
   fi
   send_telegram_alert "$(printf '<b>downstream reconcile alert</b>\nexit=%s (1=data integrity, 3=strict transient, other=setup)\n<pre>%s</pre>' "$status" "$log_tail")"
 fi
