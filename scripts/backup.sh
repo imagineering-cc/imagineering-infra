@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified backup script for all services
 # Dumps databases/data, pushes to GitHub (imagineering-cc/imagineering-backups)
-# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius]
+# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|downstream-server]
 
 SERVICE=${1:-all}
 BACKUP_DIR="/tmp/backups"
@@ -127,6 +127,32 @@ backup_claudius() {
   log "Claudius backup complete: claudius-$DATE.tar.gz"
 }
 
+backup_downstream_server() {
+  log "Backing up downstream-server..."
+
+  local db_path="$HOME/apps/downstream-server/data/downstream.db"
+  local backup_file="$BACKUP_DIR/downstream-server-$DATE.db"
+
+  if [ ! -f "$db_path" ]; then
+    error "downstream-server DB not found at $db_path"
+    return 1
+  fi
+
+  if ! command -v sqlite3 &> /dev/null; then
+    error "sqlite3 not installed, cannot back up downstream-server"
+    return 1
+  fi
+
+  # Use the SQLite .backup command for a consistent online snapshot
+  # (safe to run while the server is writing to the DB).
+  if ! sqlite3 "$db_path" ".backup '$backup_file'"; then
+    error "sqlite3 .backup failed for downstream-server"
+    return 1
+  fi
+
+  log "downstream-server backup complete: downstream-server-$DATE.db"
+}
+
 backup_to_github() {
   local services=("$@")
 
@@ -212,7 +238,7 @@ cleanup_old_backups() {
 case $SERVICE in
   all)
     SUCCEEDED=()
-    for svc in kanbn outline radicale pm-bot claudius; do
+    for svc in kanbn outline radicale pm-bot claudius downstream-server; do
       if "backup_${svc//-/_}"; then
         SUCCEEDED+=("$svc")
       else
@@ -240,11 +266,14 @@ case $SERVICE in
   claudius)
     backup_claudius && backup_to_github claudius || FAILED_SERVICES+=(claudius)
     ;;
+  downstream-server)
+    backup_downstream_server && backup_to_github downstream-server || FAILED_SERVICES+=(downstream-server)
+    ;;
   cleanup)
     cleanup_old_backups
     ;;
   *)
-    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|cleanup]"
+    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|downstream-server|cleanup]"
     exit 1
     ;;
 esac
