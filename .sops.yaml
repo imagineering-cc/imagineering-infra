@@ -3,5 +3,5 @@
 
 creation_rules:
   # Match secret yaml files in service and provider directories
-  - path_regex: (backups|outline|kanbn|dreamfinder|embodied-dreamfinder|radicale|matrix|imagineering-contact-us|dns|claudius|lugh|youtube-rag|tech-world-bots|notify)/.*\.yaml$
+  - path_regex: (backups|outline|kanbn|dreamfinder|embodied-dreamfinder|livekit|radicale|matrix|imagineering-contact-us|dns|claudius|lugh|youtube-rag|tech-world-bots|notify)/.*\.yaml$
     age: age1mkelwyppmll44ehjnarunmtamcxpee7jljyl475mlvxma7dm4f3q6lnmks
