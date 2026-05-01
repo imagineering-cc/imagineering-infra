@@ -131,3 +131,34 @@ notify.imagineering.cc {
 familiars.imagineering.cc {
     reverse_proxy localhost:3019
 }
+
+# --- downstream-server ---
+# Hosted here for infrastructure convenience; project is independent of
+# Imagineering. URL lives on its own domain (downstream-storage.cc) so the
+# boundary is visible in routing, not just in code.
+api.downstream-storage.cc {
+    reverse_proxy localhost:3018
+}
+
+# --- Tech World (Flutter web + avatar via DF) ---
+
+world.imagineering.cc {
+    # Avatar renderer and its assets — proxy to embodied-dreamfinder (port 3015).
+    # These paths match RENDERER_PATHS and RENDERER_PREFIXES in server.js.
+    @df_renderer {
+        path /avatar /avatar-renderer.js /sparks.js /avatars/* /headaudio/*
+    }
+    handle @df_renderer {
+        # Cache the GLB model aggressively — it rarely changes
+        @glb path *.glb
+        header @glb Cache-Control "public, max-age=31536000, immutable"
+
+        reverse_proxy localhost:3015
+    }
+    # Flutter web app — static files with SPA fallback
+    handle {
+        root * /srv/tech-world
+        file_server
+        try_files {path} /index.html
+    }
+}
