@@ -20,8 +20,10 @@ turn:
   udp_port: 3478
   # Domain for TURN TLS certificate
   domain: turn.imagineering.cc
-  # Let LiveKit manage the TURN TLS cert via ACME
-  external_tls: false
+  # Skip TURN TLS initially — LiveKit's ACME conflicts with Caddy on port 443.
+  # TURN/UDP on 3478 works for non-corporate environments.
+  # To enable later: use DNS-01 challenge or Caddy cert sharing.
+  external_tls: true
 
 # API keys — replaced by deploy script from secrets.yaml
 keys:
