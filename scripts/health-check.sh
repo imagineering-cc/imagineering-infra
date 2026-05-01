@@ -92,15 +92,13 @@ if [ ${#issues[@]} -gt 0 ]; then
         exit 1
     fi
 
-    # Build HTML message body. Each issue is HTML-escaped *except* for the
-    # one place we deliberately emit `<b>` tags (the Docker container name).
-    # Issues from the threshold checks are plain text already; the container
-    # check pre-formats with `<b>...</b>`. Both are safe to pass through
-    # telegram_html_escape ONLY if we tag the container name post-escape —
-    # simpler to escape everything-but-the-tags by escaping at the source
-    # of dynamic content. Container/service names come from `docker ps` and
-    # /proc and don't contain HTML metacharacters in practice, so we accept
-    # the small surface here in exchange for keeping the message readable.
+    # Build HTML message body. Issue strings come from `docker ps`, /proc,
+    # and curl rc codes — no HTML metacharacters in practice — and the
+    # container-name issue deliberately includes literal `<b>...</b>` tags
+    # for emphasis. We therefore concatenate as-is rather than passing each
+    # issue through telegram_html_escape (which would double-escape the
+    # tags). If a future check ingests untrusted text, escape it at the
+    # source before pushing into ${issues[@]}.
     body=""
     for issue in "${issues[@]}"; do
         body="${body}
@@ -110,7 +108,12 @@ if [ ${#issues[@]} -gt 0 ]; then
     # Tag team members (literal text, no Markdown link)
     tags="@sentientcogs"
 
-    message="$(printf '<b>\xF0\x9F\x9A\xA8 Server Health Alert</b>%s\n\n%s' "$body" "$tags")"
+    # U+1F6A8 ROTATING LIGHT — written as ANSI-C $'...' so the bytes are
+    # explicit and don't depend on bash's printf-format \xNN handling.
+    siren=$'\xF0\x9F\x9A\xA8'
+    message="<b>${siren} Server Health Alert</b>${body}
+
+${tags}"
 
     send_telegram_alert "$message"
 

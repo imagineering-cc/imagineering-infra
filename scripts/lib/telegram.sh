@@ -34,15 +34,19 @@ TELEGRAM_THREAD_ID="${TELEGRAM_THREAD_ID:-}"
 
 # Escape &, <, > for Telegram HTML mode. Order matters: & must be first so
 # the literal ampersands inserted by &lt; / &gt; aren't double-escaped.
+# `${1:-}` so the function is safe to call under `set -u`.
 telegram_html_escape() {
-  local s=$1
+  local s=${1:-}
   s=${s//&/&amp;}
   s=${s//</&lt;}
   s=${s//>/&gt;}
   printf '%s' "$s"
 }
 
-# Send a Telegram alert. Silent no-op if creds are not configured.
+# Send a Telegram alert. Silent no-op if creds are not configured (the
+# common dev/test path); but if creds ARE present and curl fails, log to
+# stderr — a silent communication failure for a system-critical alert is
+# exactly the failure mode we don't want.
 # Argument is the message body in Telegram HTML format. Caller is
 # responsible for escaping any dynamic content via telegram_html_escape.
 send_telegram_alert() {
@@ -52,7 +56,7 @@ send_telegram_alert() {
     return 0
   fi
   local -a args=(
-    -s -X POST
+    -sS --max-time 10 -X POST
     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
     -d "chat_id=$TELEGRAM_CHAT_ID"
     -d "parse_mode=HTML"
@@ -61,5 +65,13 @@ send_telegram_alert() {
   if [ -n "$TELEGRAM_THREAD_ID" ]; then
     args+=(-d "message_thread_id=$TELEGRAM_THREAD_ID")
   fi
-  curl "${args[@]}" > /dev/null 2>&1 || true
+  # Capture curl output. On non-zero exit, emit a one-line stderr message
+  # so the cron job's log carries a breadcrumb for the post-mortem.
+  local curl_out curl_rc
+  curl_out=$(curl "${args[@]}" 2>&1) || curl_rc=$?
+  curl_rc=${curl_rc:-0}
+  if [ "$curl_rc" -ne 0 ]; then
+    echo "send_telegram_alert: curl failed (rc=$curl_rc): $curl_out" >&2
+    return 0  # don't propagate — caller is in an alert path already
+  fi
 }
