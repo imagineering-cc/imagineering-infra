@@ -27,24 +27,11 @@ error() {
   echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2
 }
 
-send_telegram_alert() {
-  local message="$1"
-  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-    log "Telegram alert skipped (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)"
-    return 0
-  fi
-  local -a args=(
-    -s -X POST
-    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
-    -d "chat_id=$TELEGRAM_CHAT_ID"
-    -d "parse_mode=HTML"
-    --data-urlencode "text=$message"
-  )
-  if [ -n "$TELEGRAM_THREAD_ID" ]; then
-    args+=(-d "message_thread_id=$TELEGRAM_THREAD_ID")
-  fi
-  curl "${args[@]}" > /dev/null 2>&1 || true
-}
+# Source shared Telegram helper (defines send_telegram_alert + loads creds
+# from /etc/downstream-secrets/telegram.env at deploy targets).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/telegram.sh
+. "$SCRIPT_DIR/lib/telegram.sh"
 
 check_repo_size() {
   if [ ! -d "$GITHUB_BACKUP_DIR" ]; then

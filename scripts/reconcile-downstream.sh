@@ -59,33 +59,13 @@ PUB_CACHE_VOLUME="downstream-reconcile-pub-cache"
 # own Dockerfile bumps.
 DART_IMAGE="dart:3.11.5"
 
-# Telegram alert config (optional). Cron call-site exports these env vars
-# from sops-encrypted backups/secrets.yaml; if absent, alerts are skipped.
-TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-TELEGRAM_THREAD_ID="${TELEGRAM_THREAD_ID:-}"
-
-# Send a Telegram alert. Mirrors the helper in scripts/backup.sh and
-# scripts/health-check.sh. Silent no-op if creds are not configured so a
-# missing-secret deploy doesn't turn into a daily cron error spam.
-send_telegram_alert() {
-  local message="$1"
-  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-    echo "Telegram alert skipped (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set)"
-    return 0
-  fi
-  local -a args=(
-    -s -X POST
-    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
-    -d "chat_id=$TELEGRAM_CHAT_ID"
-    -d "parse_mode=HTML"
-    --data-urlencode "text=$message"
-  )
-  if [ -n "$TELEGRAM_THREAD_ID" ]; then
-    args+=(-d "message_thread_id=$TELEGRAM_THREAD_ID")
-  fi
-  curl "${args[@]}" > /dev/null 2>&1 || true
-}
+# Telegram alert config — credentials and the send_telegram_alert helper
+# come from the shared lib, which sources /etc/downstream-secrets/telegram.env
+# at deploy targets so this script never has to see the bot token in its
+# environment from a world-readable cron entry.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/telegram.sh
+. "$SCRIPT_DIR/lib/telegram.sh"
 
 # Forwarded to the Dart script. Override at the cron call-site or env.
 RECONCILE_ARGS="${RECONCILE_ARGS:-}"
@@ -170,10 +150,9 @@ if [ $status -ne 0 ]; then
     # Escape HTML special chars so Telegram's HTML parser doesn't choke on
     # log content containing <, >, or & (paths, stderr from sub-commands,
     # Dart stack frames). Without this, the alert silently fails to send
-    # exactly when we most need it. Order matters: & must be escaped first.
-    log_tail=$(tail -n 20 /home/nick/logs/reconcile-downstream.log 2>/dev/null \
-      | head -c 2000 \
-      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+    # exactly when we most need it.
+    raw_tail=$(tail -n 20 /home/nick/logs/reconcile-downstream.log 2>/dev/null | head -c 2000)
+    log_tail=$(telegram_html_escape "$raw_tail")
   fi
   send_telegram_alert "$(printf '<b>downstream reconcile alert</b>\nexit=%s (1=data integrity, 3=strict transient, other=setup)\n<pre>%s</pre>' "$status" "$log_tail")"
 fi
