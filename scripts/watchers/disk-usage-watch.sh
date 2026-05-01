@@ -77,8 +77,12 @@ root_usage_pct() {
 # still surfaces what's visible. Acceptable: even a partial top-5 tells you
 # where to look first.
 top_dirs() {
-    du -sh /var/log/* /home/* /tmp/* /var/lib/* 2>/dev/null | sort -rh | head -5
+    du -sh /var/log/* /home/* /tmp/* /var/lib/* /opt/* 2>/dev/null | sort -rh | head -5
 }
+
+# Warn-file for the "still climbing" tier in Phase B. Gates the second-fire
+# so we alert at most once per cycle even if disk hovers in the 95+ band.
+WARN_95_FILE="$CONFIG_DIR/$WATCHER_NAME.warned-95"
 
 # ============================================================================
 # FILL-IN 3 — phase_a_check: disk crossed 85%
@@ -109,8 +113,23 @@ phase_b_check() {
     local usage
     usage=$(root_usage_pct)
     log "phase_b: usage=${usage}%"
+
+    # Climbing past the critical band — second-tier alert, fired at most once
+    # per watcher lifetime (gated by WARN_95_FILE).
+    if [[ "$usage" -ge 95 && ! -f "$WARN_95_FILE" ]]; then
+        local dirs
+        dirs=$(top_dirs)
+        local msg
+        msg=$(printf '🚨🚨 <b>Sydney disk CRITICAL: %s%%</b> (climbing past initial alert)\n\n<pre>%s</pre>' \
+              "$usage" "$dirs")
+        tg "$msg"
+        touch "$WARN_95_FILE"
+        # Don't return 0 here — that would self-disable and stop watching for recovery.
+        # We've alerted; continue polling for recovery below.
+    fi
+
     if [[ "$usage" -lt 75 ]]; then
-        tg "✅ <b>Sydney disk recovered:</b> ${usage}% — disk-usage-watch self-disabling. Re-install if you want continued coverage."
+        tg "✅ <b>Sydney disk recovered:</b> ${usage}% — ${WATCHER_NAME} self-disabling. Re-install if you want continued coverage."
         return 0
     fi
     return 1
