@@ -9,6 +9,8 @@ services:
     networks:
       - imagineering
     environment:
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_SECRET=${AUTH_SECRET:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
       - KAN_API_KEY=${KAN_API_KEY}
@@ -25,6 +27,25 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       - AVATAR_STREAM_ENABLED=true
       - PORT=3000
+      - VOICE_MODE=${VOICE_MODE:-realtime}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - WHISPER_CLI=/opt/whisper/bin/whisper-cli
+      - WHISPER_MODEL=/opt/whisper/models/ggml-base.en.bin
+      - PIPER_BIN=/opt/piper/piper
+      - PIPER_VOICE=${PIPER_VOICE:-/opt/piper/voices/en_US-lessac-high.onnx}
+      - TTS_ENGINE=${TTS_ENGINE:-kokoro}
+      - KOKORO_PYTHON=python3
+      - KOKORO_SCRIPT=/app/kokoro-tts.py
+      - KOKORO_VOICE=${KOKORO_VOICE:-bm_fable}
+      - KOKORO_MODEL_DIR=/opt/kokoro
+      - LD_LIBRARY_PATH=/opt/whisper/lib:/opt/whisper/ggml-lib
+    volumes:
+      - /home/nick/whisper.cpp/build/bin:/opt/whisper/bin:ro
+      - /home/nick/whisper.cpp/build/src:/opt/whisper/lib:ro
+      - /home/nick/whisper.cpp/build/ggml/src:/opt/whisper/ggml-lib:ro
+      - /home/nick/whisper.cpp/models:/opt/whisper/models:ro
+      - /home/nick/piper:/opt/piper:ro
+      - /home/nick/kokoro:/opt/kokoro:ro
 
 # Shared network allows voice brain to reach text brain (dreamfinder:8081)
 networks:
