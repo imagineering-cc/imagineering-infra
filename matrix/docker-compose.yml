@@ -72,6 +72,26 @@ services:
     depends_on:
       - continuwuity
 
+  relay-bot-hf:
+    build: ./relay
+    restart: always
+    environment:
+      RELAY_HOMESERVER_URL: http://continuwuity:6167
+      RELAY_DOMAIN: ${MATRIX_SERVER_NAME}
+      RELAY_AS_TOKEN: ${HF_RELAY_AS_TOKEN}
+      RELAY_HS_TOKEN: ${HF_RELAY_HS_TOKEN}
+      RELAY_PORTAL_ROOMS: ${HF_PORTAL_ROOMS:-}
+      RELAY_HUB_ROOM_ID: ${HF_HUB_ROOM_ID}
+      RELAY_BOT_LOCALPART: relay-bot-hf
+      RELAY_PUPPET_PREFIX: _relayhf_
+      RELAY_DB_PATH: /data/relay.db
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-INFO}
+      RELAY_DOUBLE_PUPPETS: ""
+    volumes:
+      - relay_hf_data:/data
+    depends_on:
+      - continuwuity
+
 volumes:
   continuwuity_data:
   telegram_data:
@@ -79,3 +99,4 @@ volumes:
   signal_data:
   whatsapp_data:
   relay_data:
+  relay_hf_data:
