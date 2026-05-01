@@ -24,43 +24,74 @@ echo "Deploying to $REMOTE..."
 
 deploy_scripts() {
     echo "Deploying scripts..."
-    ssh "$REMOTE" "sudo mkdir -p /opt/scripts"
+    ssh "$REMOTE" "sudo mkdir -p /opt/scripts /opt/scripts/lib"
     rsync -avz "$REPO_ROOT/scripts/" "$REMOTE":/tmp/scripts/
-    ssh "$REMOTE" "sudo mv /tmp/scripts/* /opt/scripts/ && sudo chmod +x /opt/scripts/*.sh"
+    # Move scripts into place. `cp -r` first so the lib/ subdir lands too,
+    # then chmod +x only the top-level *.sh (the lib is sourced, not run).
+    ssh "$REMOTE" "sudo cp -r /tmp/scripts/. /opt/scripts/ && sudo chmod +x /opt/scripts/*.sh && rm -rf /tmp/scripts"
 
-    # Set up health check cron (uses Telegram for server alerts)
-    # Requires TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID in backups/secrets.yaml
+    # Install the Telegram-secrets envfile (root:nick 0640) so cron scripts
+    # running as `nick` can read it but the world cannot. This replaces the
+    # previous pattern of inlining TELEGRAM_BOT_TOKEN into world-readable
+    # /etc/cron.d/* entries (task #21).
     local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
     if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
-        echo "Setting up health check cron..."
+        echo "Installing /etc/downstream-secrets/telegram.env..."
         local BOT_TOKEN CHAT_ID THREAD_ID
         BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
         CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
         THREAD_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_thread_id')
-        ssh "$REMOTE" "mkdir -p ~/logs && echo '0 * * * * nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=$CHAT_ID TELEGRAM_THREAD_ID=$THREAD_ID /opt/scripts/health-check.sh >> /home/nick/logs/health-check.log 2>&1' | sudo tee /etc/cron.d/health-check > /dev/null"
-        echo "Health check cron installed (hourly)"
+        # Build locally, scp, install with restrictive perms. Avoid putting
+        # the token on a remote shell command line where it would land in
+        # ~/.bash_history or `ps` output.
+        local SECRETS_TMP
+        SECRETS_TMP=$(mktemp)
+        # Strip null/empty values so the envfile is clean (e.g. THREAD_ID
+        # is optional and may legitimately be missing).
+        {
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BOT_TOKEN"
+            printf 'TELEGRAM_CHAT_ID=%s\n'   "$CHAT_ID"
+            if [ -n "$THREAD_ID" ] && [ "$THREAD_ID" != "null" ]; then
+                printf 'TELEGRAM_THREAD_ID=%s\n' "$THREAD_ID"
+            fi
+        } > "$SECRETS_TMP"
+        chmod 0600 "$SECRETS_TMP"
+        scp -q "$SECRETS_TMP" "$REMOTE":/tmp/telegram.env
+        ssh "$REMOTE" "sudo mkdir -p /etc/downstream-secrets && \
+            sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/downstream-secrets/telegram.env && \
+            rm -f /tmp/telegram.env"
+        rm -f "$SECRETS_TMP"
+        echo "  Telegram envfile installed (mode 0640 root:nick)"
     else
-        echo "NOTE: No Telegram credentials in backups/secrets.yaml, skipping health check cron"
+        echo "NOTE: No Telegram credentials in backups/secrets.yaml — alerts disabled"
         echo "  Add telegram_bot_token, telegram_chat_id, telegram_thread_id to enable alerts"
     fi
+
+    # Set up health check cron. Tokens are NOT inlined here any more — the
+    # script reads /etc/downstream-secrets/telegram.env via lib/telegram.sh.
+    echo "Installing /etc/cron.d/health-check..."
+    ssh "$REMOTE" "mkdir -p ~/logs && printf '%s\n' \
+        'SHELL=/bin/bash' \
+        'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+        'MAILTO=' \
+        '0 * * * * nick /opt/scripts/health-check.sh >> /home/nick/logs/health-check.log 2>&1' \
+        | sudo tee /etc/cron.d/health-check > /dev/null && \
+        sudo chmod 0644 /etc/cron.d/health-check && sudo chown root:root /etc/cron.d/health-check"
+    echo "Health check cron installed (hourly)"
 
     echo "Scripts deployed to /opt/scripts/"
 }
 
 deploy_downstream_reconciler() {
     # Install the nightly reconcile_b2 cron + logrotate config on the host.
-    # `deploy_scripts` is responsible for placing the cron's invoking script
-    # in /opt/scripts/; this function only owns the cron + logrotate wiring.
-    #
-    # Templates Telegram alert env vars from backups/secrets.yaml into the
-    # cron entry (mirrors the health-check pattern in deploy_scripts) so the
-    # reconciler can ping on data-integrity findings. Falls back to the
-    # alert-less cron if the secrets file is absent or empty.
+    # `deploy_scripts` owns both the invoking script in /opt/scripts/ and
+    # the /etc/downstream-secrets/telegram.env envfile that the script reads
+    # via scripts/lib/telegram.sh. This function just places the cron entry
+    # and logrotate config — it no longer touches secrets at all (task #21).
     echo "Setting up downstream reconcile_b2 nightly cron..."
 
     local CRON_SRC="$REPO_ROOT/downstream-server/cron/reconcile-downstream"
     local LOGROTATE_SRC="$REPO_ROOT/downstream-server/logrotate/reconcile-downstream"
-    local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
 
     if [ ! -f "$CRON_SRC" ] || [ ! -f "$LOGROTATE_SRC" ]; then
         echo "ERROR: reconcile cron/logrotate sources missing in $REPO_ROOT/downstream-server/"
@@ -69,36 +100,11 @@ deploy_downstream_reconciler() {
 
     ssh "$REMOTE" "mkdir -p ~/logs"
 
-    # Build the cron file locally, optionally injecting Telegram env vars
-    # before the cron entry's `nick` user field.
-    local CRON_TMP
-    CRON_TMP=$(mktemp)
-    if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
-        local BOT_TOKEN CHAT_ID THREAD_ID
-        BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
-        CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
-        THREAD_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_thread_id')
-        if [ -n "$BOT_TOKEN" ] && [ "$BOT_TOKEN" != "null" ]; then
-            echo "  Templating Telegram credentials into reconcile cron..."
-            # Replace the bare cron line with one carrying inline env vars.
-            # Match the line that begins with the schedule + ` nick `.
-            sed -e "s|^\(15 4 \* \* \*\) nick |\1 nick TELEGRAM_BOT_TOKEN=$BOT_TOKEN TELEGRAM_CHAT_ID=$CHAT_ID TELEGRAM_THREAD_ID=$THREAD_ID |" \
-                "$CRON_SRC" > "$CRON_TMP"
-        else
-            cp "$CRON_SRC" "$CRON_TMP"
-            echo "  NOTE: Telegram secrets present but empty — reconciler alerts disabled"
-        fi
-    else
-        cp "$CRON_SRC" "$CRON_TMP"
-        echo "  NOTE: No Telegram credentials in backups/secrets.yaml — reconciler alerts disabled"
-    fi
-
-    scp "$CRON_TMP" "$REMOTE":/tmp/reconcile-downstream.cron
+    scp "$CRON_SRC" "$REMOTE":/tmp/reconcile-downstream.cron
     scp "$LOGROTATE_SRC" "$REMOTE":/tmp/reconcile-downstream.logrotate
     ssh "$REMOTE" "sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.cron /etc/cron.d/reconcile-downstream && \
         sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.logrotate /etc/logrotate.d/reconcile-downstream && \
         rm -f /tmp/reconcile-downstream.cron /tmp/reconcile-downstream.logrotate"
-    rm -f "$CRON_TMP"
 
     echo "Reconcile cron installed (daily 04:15, logs at /home/nick/logs/reconcile-downstream.log)"
 }

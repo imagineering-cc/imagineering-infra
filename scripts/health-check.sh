@@ -1,6 +1,14 @@
 #!/bin/bash
-# Server health check - sends Telegram alerts when thresholds are exceeded
-# Runs hourly via cron. Requires env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID
+# Server health check - sends Telegram alerts when thresholds are exceeded.
+# Runs hourly via cron. Telegram credentials are loaded from
+# /etc/downstream-secrets/telegram.env by the shared helper below — they are
+# no longer inlined into the cron entry (avoids leaking the bot token in a
+# world-readable /etc/cron.d/ file).
+
+# Source shared Telegram helper (defines send_telegram_alert + loads creds).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/telegram.sh
+. "$SCRIPT_DIR/lib/telegram.sh"
 
 DISK_THRESHOLD=80
 MEMORY_THRESHOLD=90
@@ -20,7 +28,7 @@ issues=()
 while read -r usage mount; do
     pct=${usage%\%}
     if [ "$pct" -gt "$DISK_THRESHOLD" ]; then
-        issues+=("Disk ${mount}: ${pct}% used \\(threshold: ${DISK_THRESHOLD}%\\)")
+        issues+=("Disk ${mount}: ${pct}% used (threshold: ${DISK_THRESHOLD}%)")
     fi
 done < <(df -h --output=pcent,target -x tmpfs -x devtmpfs -x overlay | tail -n +2 | awk '{print $1, $2}')
 
@@ -30,7 +38,7 @@ mem_available=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
 if [ "$mem_total" -gt 0 ]; then
     mem_used_pct=$(( (mem_total - mem_available) * 100 / mem_total ))
     if [ "$mem_used_pct" -gt "$MEMORY_THRESHOLD" ]; then
-        issues+=("Memory: ${mem_used_pct}% used \\(threshold: ${MEMORY_THRESHOLD}%\\)")
+        issues+=("Memory: ${mem_used_pct}% used (threshold: ${MEMORY_THRESHOLD}%)")
     fi
 fi
 
@@ -40,13 +48,13 @@ swap_free=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
 if [ "$swap_total" -gt 0 ]; then
     swap_used_pct=$(( (swap_total - swap_free) * 100 / swap_total ))
     if [ "$swap_used_pct" -gt "$SWAP_THRESHOLD" ]; then
-        issues+=("Swap: ${swap_used_pct}% used \\(threshold: ${SWAP_THRESHOLD}%\\)")
+        issues+=("Swap: ${swap_used_pct}% used (threshold: ${SWAP_THRESHOLD}%)")
     fi
 fi
 
 # Check for unhealthy Docker containers
 while read -r name status; do
-    issues+=("Container *${name}*: ${status}")
+    issues+=("Container <b>${name}</b>: ${status}")
 done < <(docker ps -a --filter "status=exited" --filter "status=restarting" --format "{{.Names}} {{.Status}}" 2>/dev/null)
 
 # Check downstream-server request count (data-loss canary)
@@ -54,7 +62,7 @@ mkdir -p "$DOWNSTREAM_STATE_DIR"
 ds_response=$(curl -sS --max-time 10 "$DOWNSTREAM_HEALTH_URL" 2>/dev/null)
 ds_curl_rc=$?
 if [ "$ds_curl_rc" -ne 0 ] || [ -z "$ds_response" ]; then
-    issues+=("downstream-server: /api/health unreachable \\(curl rc=${ds_curl_rc}\\)")
+    issues+=("downstream-server: /api/health unreachable (curl rc=${ds_curl_rc})")
 elif ! ds_total=$(echo "$ds_response" | jq -e '.requests.total' 2>/dev/null); then
     issues+=("downstream-server: /api/health returned unexpected JSON")
 else
@@ -84,22 +92,27 @@ if [ ${#issues[@]} -gt 0 ]; then
         exit 1
     fi
 
+    # Build HTML message body. Each issue is HTML-escaped *except* for the
+    # one place we deliberately emit `<b>` tags (the Docker container name).
+    # Issues from the threshold checks are plain text already; the container
+    # check pre-formats with `<b>...</b>`. Both are safe to pass through
+    # telegram_html_escape ONLY if we tag the container name post-escape —
+    # simpler to escape everything-but-the-tags by escaping at the source
+    # of dynamic content. Container/service names come from `docker ps` and
+    # /proc and don't contain HTML metacharacters in practice, so we accept
+    # the small surface here in exchange for keeping the message readable.
     body=""
     for issue in "${issues[@]}"; do
-        body="${body}\n\\- ${issue}"
+        body="${body}
+- ${issue}"
     done
 
-    # Tag team members
+    # Tag team members (literal text, no Markdown link)
     tags="@sentientcogs"
 
-    message="*\U0001F6A8 Server Health Alert*${body}\n\n${tags}"
+    message="$(printf '<b>\xF0\x9F\x9A\xA8 Server Health Alert</b>%s\n\n%s' "$body" "$tags")"
 
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" \
-        -d message_thread_id="$TELEGRAM_THREAD_ID" \
-        -d parse_mode="MarkdownV2" \
-        --data-urlencode "text=$(echo -e "$message")" \
-        > /dev/null
+    send_telegram_alert "$message"
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') Alert sent: ${#issues[@]} issue(s)"
 else
