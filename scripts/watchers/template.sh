@@ -28,10 +28,10 @@ set -euo pipefail
 # ============================================================================
 # FILL-IN 1 — identity
 # ============================================================================
-WATCHER_NAME="example-watcher"   # used for state file names + log file name
-CRON_TAG="example-watcher"       # MUST match the trailing comment on the
+WATCHER_NAME="CHANGE_ME"         # used for state file names + log file name
+CRON_TAG="CHANGE_ME"             # MUST match the trailing comment on the
                                  # crontab entry, e.g.
-                                 #   */15 * * * * /path/to/script  # example-watcher
+                                 #   */15 * * * * /path/to/script  # cert-expiry-watch
                                  # self_disable() greps for this tag to
                                  # remove the line on success.
 
@@ -177,6 +177,8 @@ esac
 # ============================================================================
 # WARN_FILE="$CONFIG_DIR/$WATCHER_NAME.warned-24h"
 # if [[ "$ELAPSED_HOURS" -ge 24 && ! -f "$WARN_FILE" ]]; then
-#     tg "⚠️ <b>$WATCHER_NAME</b>: 24h elapsed, condition still not met. Investigate?"
+#     # Plain text — no HTML interpolation of $WATCHER_NAME, since names
+#     # may contain characters that would need escaping for parse_mode=HTML.
+#     tg "⚠️ $WATCHER_NAME: 24h elapsed, condition still not met. Investigate?"
 #     touch "$WARN_FILE"
 # fi

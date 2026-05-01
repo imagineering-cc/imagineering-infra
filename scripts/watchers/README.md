@@ -8,10 +8,13 @@ detect an OCI free-tier → PAYG flip; fired correctly, notified twice,
 self-disabled). The watcher worked because it was specific. This template
 keeps the shape that made it work and parameterizes the parts that vary.
 
+**Requires:** bash 4+, `jq`, `curl`, `crontab` on the target box. (Sydney
+has all four; verify on a fresh host before installing.)
+
 ## When to reach for this
 
-The decision tree from
-[`feedback_co_locate_watcher_with_watched.md`](../../) (in memory):
+The decision tree (recorded in auto-memory under
+`feedback_co_locate_watcher_with_watched.md`, not in the repo):
 
 - Does Sydney have credentials + network reach to query the thing? → **cron on Sydney**
 - Watched cadence faster than 1hr? → **cron on Sydney** (remote agents floor at 1hr)
@@ -43,7 +46,22 @@ Cert expiry watch: phase A = "cert is now <14 days from expiry," phase B
 
 For genuinely single-phase watchers ("alert when X, then stop"), make
 `phase_b_check` a one-liner returning 0. The state machine collapses to
-"fire once, self-disable" with no extra ceremony.
+"fire once, self-disable" with no extra ceremony:
+
+```bash
+phase_a_check() {
+    USAGE=$(df / | awk 'NR==2 {gsub("%",""); print $5}')
+    if [[ "$USAGE" -ge 85 ]]; then
+        tg "🚨 Sydney disk at ${USAGE}% (top dirs): $(du -sh /var/log/* 2>/dev/null | sort -rh | head -3)"
+        return 0
+    fi
+    return 1
+}
+
+phase_b_check() {
+    return 0   # immediately transition to DONE; one-shot watcher
+}
+```
 
 ## Spawn a new watcher
 
@@ -175,10 +193,10 @@ listed here so the template has demand-side context):
 
 5. **`kanbn/kan` upstream release.**
    Phase A: a new release tag appears containing the migration we patched
-   manually for `card_activity.attachmentId` (see
-   `memory/MEMORY.md` → Kan.bn → Migration Issue). Phase B: we've upgraded
-   our pinned version. Self-disable. Catches "the upstream fix shipped,
-   we can drop our manual workaround."
+   manually for `card_activity.attachmentId` (see CLAUDE.md → kanbn →
+   Migration Issue). Phase B: we've upgraded our pinned version.
+   Self-disable. Catches "the upstream fix shipped, we can drop our
+   manual workaround."
 
 Each of these has the right shape (external state, transitions, want-to-be-notified,
 genuinely-stops-mattering-after-resolution). Each is also <50 lines of
@@ -187,6 +205,11 @@ phase logic on top of the template. If you build one, link it back here.
 ## See also
 
 - `template.sh` — the file
-- `memory/project_notify_service.md` — the notify primitive
-- `memory/feedback_co_locate_watcher_with_watched.md` — the principle
-- `oci-melbourne-watch.sh` (on Sydney, `/home/ubuntu/`) — the canonical example, frozen at DONE
+- `notify/` (in this repo) — the notify proxy source. Auto-memory note
+  at `project_notify_service.md` has full deployment context.
+- The co-locate principle — auto-memory note at
+  `feedback_co_locate_watcher_with_watched.md`. (Both auto-memory paths
+  resolve under `~/.claude/projects/<encoded-cwd>/memory/` — they're
+  Claude Code session memory, not repo files.)
+- `oci-melbourne-watch.sh` on Sydney at `/home/ubuntu/` — the canonical
+  example, frozen at DONE.
