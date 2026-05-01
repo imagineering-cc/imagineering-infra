@@ -1,0 +1,18 @@
+services:
+  familiars-server:
+    build:
+      # `./source` is rsynced from the familiars repo at deploy time.
+      # The Dockerfile lives at the repo root.
+      context: ./source
+      dockerfile: Dockerfile
+    image: img-familiars-server:latest
+    container_name: img-familiars-server
+    restart: unless-stopped
+    ports:
+      # Bind to loopback only — public traffic comes through Caddy on 443.
+      - "127.0.0.1:3019:8081"
+    volumes:
+      # Persist SQLite database across container restarts.
+      - ./data:/data
+    env_file:
+      - .env

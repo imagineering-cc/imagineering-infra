@@ -195,6 +195,56 @@ NOTIFY_API_KEY=\(.notify_api_key)"' > "$REPO_ROOT/notify/.env"
     echo "  Health:   curl https://notify.imagineering.cc/health"
 }
 
+deploy_familiars_server() {
+    echo "Deploying familiars-server..."
+
+    local FAM_SECRETS="$REPO_ROOT/familiars-server/secrets.yaml"
+    local FAM_SRC="$HOME/git/experiments/familiars"
+
+    # Check for secrets file
+    if [ ! -f "$FAM_SECRETS" ]; then
+        echo "ERROR: familiars-server/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i familiars-server/secrets.yaml"
+        return 1
+    fi
+
+    # Check for source code
+    if [ ! -d "$FAM_SRC" ]; then
+        echo "ERROR: familiars repo not found at $FAM_SRC"
+        return 1
+    fi
+
+    # Generate .env from encrypted secrets
+    echo "Generating .env from encrypted secrets..."
+    sops -d "$FAM_SECRETS" | yq -r '"# familiars-server Configuration (auto-generated from secrets.yaml)
+FIREBASE_PROJECT_ID=\(.firebase_project_id)
+FIREBASE_SERVICE_ACCOUNT_BASE64=\(.firebase_service_account_base64)
+CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)"' > "$REPO_ROOT/familiars-server/.env"
+
+    # Deploy compose + .env
+    ssh "$REMOTE" "mkdir -p ~/apps/familiars-server/source ~/apps/familiars-server/data"
+    rsync -avz --exclude 'secrets.yaml' --exclude 'secrets.yaml.example' --exclude 'source' --exclude 'data' \
+        "$REPO_ROOT/familiars-server/" "$REMOTE":~/apps/familiars-server/
+
+    # Rsync familiars source. Excludes design-only artifacts and dart caches.
+    rsync -avz --delete \
+        --exclude '.git' \
+        --exclude '.dart_tool' \
+        --exclude 'build' \
+        "$FAM_SRC/" "$REMOTE":~/apps/familiars-server/source/
+
+    # Clean up local .env
+    rm -f "$REPO_ROOT/familiars-server/.env"
+
+    # Build and start
+    ssh "$REMOTE" "cd ~/apps/familiars-server && DOCKER_BUILDKIT=1 docker compose build && docker compose up -d"
+
+    echo "familiars-server deployed!"
+    echo "  URL: https://familiars.imagineering.cc"
+    echo "  Health: curl https://familiars.imagineering.cc/health"
+    echo "  Logs: ssh $REMOTE 'docker logs -f img-familiars-server'"
+}
+
 deploy_backups() {
     echo "Deploying backup configuration..."
 
@@ -1054,6 +1104,9 @@ case $SERVICE in
         ;;
     downstream-server|server|downstream)
         deploy_downstream_server
+        ;;
+    familiars-server|familiars)
+        deploy_familiars_server
         ;;
     *)
         echo "Unknown service: $SERVICE"

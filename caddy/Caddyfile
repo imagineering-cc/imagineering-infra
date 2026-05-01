@@ -125,3 +125,9 @@ symposium.imagineering.cc {
 notify.imagineering.cc {
     reverse_proxy localhost:8090
 }
+
+# --- familiars (agent control surface) ---
+
+familiars.imagineering.cc {
+    reverse_proxy localhost:3019
+}
