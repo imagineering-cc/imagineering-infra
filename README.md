@@ -11,6 +11,7 @@ Infrastructure monorepo for self-hosted services.
 | MinIO | S3-compatible file storage | storage.imagineering.cc |
 | [Caddy](./caddy/) | Reverse proxy with automatic HTTPS | - |
 | [Radicale](./radicale/) | CalDAV/CardDAV server | dav.imagineering.cc |
+| [downstream-server](./downstream-server/) | REST + SSE for the Downstream personal media library (guest service — not part of Imagineering) | api.downstream-storage.cc |
 
 ## Infrastructure
 
@@ -21,10 +22,11 @@ Infrastructure monorepo for self-hosted services.
 ## Architecture
 
 ```
-Internet → Caddy (443/80) → Kan.bn (3003)
-                          → Outline (3002)
-                          → MinIO (9000)
+Internet → Caddy (443/80) → Kan.bn (3013)
+                          → Outline (3012)
+                          → MinIO (9010)
                           → Radicale (5232)
+                          → downstream-server (3018)  [guest service]
 ```
 
 ## Quick Start
