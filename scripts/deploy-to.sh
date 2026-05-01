@@ -699,7 +699,11 @@ RELAY_HS_TOKEN=\(.relay_hs_token)
 PORTAL_ROOMS=\(.portal_rooms)
 HUB_ROOM_ID=\(.hub_room_id)
 RELAY_DOUBLE_PUPPETS=\(.relay_double_puppets)
-RELAY_LOG_LEVEL=\(.relay_log_level)"' > "$REPO_ROOT/matrix/.env"
+RELAY_LOG_LEVEL=\(.relay_log_level)
+HF_RELAY_AS_TOKEN=\(.hf_relay_as_token)
+HF_RELAY_HS_TOKEN=\(.hf_relay_hs_token)
+HF_PORTAL_ROOMS=\(.hf_portal_rooms)
+HF_HUB_ROOM_ID=\(.hf_hub_room_id)"' > "$REPO_ROOT/matrix/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/matrix"
@@ -716,8 +720,9 @@ RELAY_LOG_LEVEL=\(.relay_log_level)"' > "$REPO_ROOT/matrix/.env"
     # Clean up local .env
     rm -f "$REPO_ROOT/matrix/.env"
 
-    # Build relay bot and start all services
-    ssh "$REMOTE" "cd ~/apps/matrix && docker compose pull && DOCKER_BUILDKIT=1 docker compose build relay-bot && docker compose up -d"
+    # Build relay bots and start all services (relay-bot + relay-bot-hf
+    # share the ./relay build context, so this does both efficiently)
+    ssh "$REMOTE" "cd ~/apps/matrix && docker compose pull && DOCKER_BUILDKIT=1 docker compose build relay-bot relay-bot-hf && docker compose up -d"
 
     echo "Matrix deployed!"
     echo "  URL: https://matrix.imagineering.cc"
