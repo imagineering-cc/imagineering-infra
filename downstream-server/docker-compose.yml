@@ -1,0 +1,24 @@
+services:
+  downstream-server:
+    build:
+      # `./source` is rsynced from the downstream monorepo at deploy time.
+      # Build context must be the monorepo root because the Dockerfile does
+      # `COPY downstream-server/` and `COPY packages/`.
+      context: ./source
+      dockerfile: downstream-server/Dockerfile
+      args:
+        # Baked into the binary at compile time, exposed via /api/health.
+        # Reads GIT_REV from the env (deploy script reads `git rev-parse
+        # --short HEAD` from the source dir before invoking compose).
+        GIT_REV: ${GIT_REV:-dev}
+    image: img-downstream-server:latest
+    container_name: img-downstream-server
+    restart: unless-stopped
+    ports:
+      # Bind to loopback only — public traffic comes through Caddy on 443.
+      - "127.0.0.1:3018:8081"
+    volumes:
+      # Persist SQLite database across container restarts.
+      - ./data:/data
+    env_file:
+      - .env
