@@ -110,6 +110,15 @@ deploy_downstream_reconciler() {
 }
 
 deploy_site() {
+    # imagineering.cc landing page. Source: separate website/ repo.
+    #
+    # Destination is ~/apps/site (NOT /srv/site) — the Caddy container
+    # bind-mounts /home/nick/apps/site -> /srv/site:ro at the path the
+    # Caddyfile references. See caddy/docker-compose.yml. Same convention as
+    # the invite mount. Previously this rsynced to host /srv/site, which is
+    # not visible inside the Caddy container's filesystem — the script was
+    # writing to dead state for some time, and live deploys must have been
+    # happening out of band (manual rsync to ~/apps/site).
     local SITE_SRC="$HOME/git/orgs/imagineering/website"
 
     if [ ! -d "$SITE_SRC" ]; then
@@ -118,9 +127,9 @@ deploy_site() {
     fi
 
     echo "Deploying imagineering.cc landing page..."
-    ssh "$REMOTE" "mkdir -p /srv/site"
-    rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'README.md' "$SITE_SRC/" "$REMOTE":/srv/site/
-    echo "Site deployed to /srv/site"
+    ssh "$REMOTE" "mkdir -p ~/apps/site"
+    rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'README.md' "$SITE_SRC/" "$REMOTE":apps/site/
+    echo "Site deployed to ~/apps/site (mounted into Caddy as /srv/site)"
 }
 
 deploy_invite() {
