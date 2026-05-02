@@ -188,6 +188,22 @@ hostname or stack frame silently 400s. HTML mode escapes only `&`, `<`,
 `s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g` if it might contain those
 characters.
 
+## Dry-run mode
+
+Set `DRY_RUN=1` to make `tg()` log the message instead of POSTing to
+notify.imagineering.cc. Use this while iterating on a new watcher to
+avoid Telegram noise:
+
+```bash
+DRY_RUN=1 sudo -u ubuntu /home/ubuntu/.smoketest-foo.sh
+tail /home/ubuntu/foo-watch.log
+# [<ts>] tg [DRY_RUN]: 🚨 ... (your alert text, newlines flattened)
+```
+
+Newlines in the message are flattened to single spaces in the log so each
+DRY_RUN tg() takes one log line. The actual POST path uses the full
+multi-line message.
+
 ## Common gotchas
 
 **`pipefail` false positives in piped captures.** `out=$(cmd1 | cmd2 | awk 'NR==1 {...}')` under `set -o pipefail` may report rc=1 even when each stage exits 0 individually and the data flows through correctly. Encountered in `backup-recency-watch.sh`'s `find | sort | awk` pattern; cause appears to be awk's selective-print-without-exit interaction with sort's flush. Workaround: `out=$(... || true)` to ignore the spurious failure when you're sure the data is sound.

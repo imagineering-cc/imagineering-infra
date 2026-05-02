@@ -59,8 +59,14 @@ log() { echo "[$(ts)] $*" >> "$LOG_FILE"; }
 # tg <html-message>
 #   Fires a notification via notify.imagineering.cc. HTML parse mode by
 #   default — caller is responsible for escaping <, >, & in dynamic text.
+#   Set DRY_RUN=1 to log the message instead of POSTing — useful while
+#   developing/smoke-testing a watcher to avoid Telegram noise.
 tg() {
     local msg="$1"
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        log "tg [DRY_RUN]: ${msg//$'\n'/ }"
+        return 0
+    fi
     if [[ -z "${NOTIFY_URL:-}" || -z "${NOTIFY_API_KEY:-}" ]]; then
         log "tg: NOTIFY_URL/NOTIFY_API_KEY not set; skipping"
         return 0
