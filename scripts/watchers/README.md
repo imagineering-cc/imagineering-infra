@@ -188,6 +188,14 @@ hostname or stack frame silently 400s. HTML mode escapes only `&`, `<`,
 `s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g` if it might contain those
 characters.
 
+## Common gotchas
+
+**`pipefail` false positives in piped captures.** `out=$(cmd1 | cmd2 | awk 'NR==1 {...}')` under `set -o pipefail` may report rc=1 even when each stage exits 0 individually and the data flows through correctly. Encountered in `backup-recency-watch.sh`'s `find | sort | awk` pattern; cause appears to be awk's selective-print-without-exit interaction with sort's flush. Workaround: `out=$(... || true)` to ignore the spurious failure when you're sure the data is sound.
+
+**`grep -c '' <<< "$x"`** counts 1 for `$x=""` because heredoc adds a trailing newline. Use a custom `nlines()` helper (`if -z then 0 else awk 'END { print NR }' <<< "$x"`) when you need accurate empty-vs-nonempty line counts.
+
+**Glob expansion in `ssh ... 'sudo rm -f /path/to/foo.*'`** happens in the *local* shell, not on the remote. If the local cwd has no match, `*` is passed literally and the remote rm is a no-op. Use `ssh ... 'sudo bash -c "rm -f /path/to/foo.*"'` to evaluate the glob remotely.
+
 ## Candidate watchers
 
 Concrete watches worth building from this template (none are built yet —
