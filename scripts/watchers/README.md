@@ -63,6 +63,28 @@ phase_b_check() {
 }
 ```
 
+## Layout (post-#34 / lib extraction)
+
+```
+scripts/watchers/
+├── lib/
+│   └── watcher-base.sh    # shared helpers + state machine (sourced by all watchers)
+├── template.sh            # skeleton for new watchers
+├── README.md              # this file
+├── disk-usage-watch.sh    # built example
+└── …                       # other watchers
+```
+
+Each watcher sources `lib/watcher-base.sh`, which provides `log()`, `tg()`,
+`self_disable()`, and `run_watcher()` (the state machine driver). The
+watcher itself defines only `WATCHER_NAME`, `CRON_TAG`, `phase_a_check`,
+and `phase_b_check`. Typical watcher size: 50-80 lines.
+
+On Sydney, the lib is deployed once at `/home/ubuntu/lib/watcher-base.sh`
+and watchers source it via `"$(dirname "$0")/lib/watcher-base.sh"` (or
+`$HOME/lib/watcher-base.sh` as fallback). Updating the lib is a single
+file change that all watchers pick up on next cron tick.
+
 ## Spawn a new watcher
 
 ```bash
@@ -72,9 +94,12 @@ $EDITOR /tmp/cert-expiry-watch.sh
 #    - Set WATCHER_NAME and CRON_TAG to "cert-expiry-watch" (or similar).
 #    - Implement phase_a_check + phase_b_check.
 
-# 2. Ship it to Sydney.
-scp /tmp/cert-expiry-watch.sh 149.118.69.221:/home/ubuntu/
-ssh 149.118.69.221 'chmod +x /home/ubuntu/cert-expiry-watch.sh'
+# 2. Ship the watcher (and the lib if Sydney doesn't have it yet) to Sydney.
+ssh 149.118.69.221 'mkdir -p /home/ubuntu/lib'
+scp scripts/watchers/lib/watcher-base.sh 149.118.69.221:/tmp/   # one-time
+ssh 149.118.69.221 'sudo install -m 0755 -o ubuntu -g ubuntu /tmp/watcher-base.sh /home/ubuntu/lib/'
+scp /tmp/cert-expiry-watch.sh 149.118.69.221:/tmp/
+ssh 149.118.69.221 'sudo install -m 0755 -o ubuntu -g ubuntu /tmp/cert-expiry-watch.sh /home/ubuntu/'
 
 # 3. Confirm notify creds exist on the box (one-time, already in place
 #    if any other watcher has run there):

@@ -26,102 +26,45 @@
 set -euo pipefail
 
 # ============================================================================
-# FILL-IN 1 — identity
+# FILL-IN 1 — identity (must come BEFORE sourcing the lib)
 # ============================================================================
+# shellcheck disable=SC2034  # both consumed by watcher-base.sh after sourcing
 WATCHER_NAME="CHANGE_ME"         # used for state file names + log file name
+# shellcheck disable=SC2034
 CRON_TAG="CHANGE_ME"             # MUST match the trailing comment on the
                                  # crontab entry, e.g.
                                  #   */15 * * * * /path/to/script  # cert-expiry-watch
-                                 # self_disable() greps for this tag to
-                                 # remove the line on success.
+                                 # self_disable() greps for this tag.
 
 # ============================================================================
-# FILL-IN 2 — paths (usually leave alone)
+# Source shared lib — provides log(), tg(), self_disable(), run_watcher(),
+# and sets CONFIG_DIR / STATE_FILE / LOG_FILE / ELAPSED_HOURS.
 # ============================================================================
-CONFIG_DIR="$HOME/.config/imagineering"
-STATE_FILE="$CONFIG_DIR/$WATCHER_NAME.state"
-START_FILE="$CONFIG_DIR/$WATCHER_NAME.start"
-LOG_FILE="$HOME/$WATCHER_NAME.log"
-CRED_FILE="$CONFIG_DIR/notify-credentials"   # exports NOTIFY_URL + NOTIFY_API_KEY
-
-mkdir -p "$CONFIG_DIR"
-
-# ============================================================================
-# Helpers (don't edit unless you know why)
-# ============================================================================
-ts()  { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
-log() { echo "[$(ts)] $*" >> "$LOG_FILE"; }
-
-# Source notify creds. Silent no-op if absent — log() still works.
-# shellcheck source=/dev/null
-[[ -r "$CRED_FILE" ]] && { set -a; . "$CRED_FILE"; set +a; }
-
-# tg <html-message>
-#   Fires a notification via notify.imagineering.cc. HTML parse mode by
-#   default — escape <, >, & in dynamic content. Failures are logged but
-#   never abort the watcher (a failed notify shouldn't flip cron's
-#   exit code; the next cycle will retry).
-tg() {
-    local msg="$1"
-    if [[ -z "${NOTIFY_URL:-}" || -z "${NOTIFY_API_KEY:-}" ]]; then
-        log "tg: NOTIFY_URL/NOTIFY_API_KEY not set; skipping"
-        return 0
-    fi
-    local payload
-    payload=$(jq -n --arg m "$msg" '{message:$m, parse_mode:"HTML"}')
-    local result
-    if result=$(curl -sS --max-time 10 -X POST "${NOTIFY_URL}/send" \
-            -H "Authorization: Bearer ${NOTIFY_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$payload" 2>&1); then
-        log "tg: $(echo "$result" | jq -r '"ok=\(.ok) err=\(.description // "-")"' 2>/dev/null || echo "raw=$result")"
-    else
-        log "tg: curl failed: $result"
-    fi
-}
-
-# self_disable
-#   Removes any crontab line containing $CRON_TAG. Idempotent. Runs against
-#   the invoking user's crontab — install the cron entry under the same
-#   user that runs this script.
-self_disable() {
-    if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
-        crontab -l 2>/dev/null | grep -vF "$CRON_TAG" | crontab -
-        log "self-disabled cron entry tagged: $CRON_TAG"
-    else
-        log "self_disable: no cron entry found for tag: $CRON_TAG (already removed?)"
-    fi
-}
-
-# Record first-run epoch for elapsed-time reasoning in checks.
-[[ -f "$START_FILE" ]] || date +%s > "$START_FILE"
-START_EPOCH=$(cat "$START_FILE")
-NOW_EPOCH=$(date +%s)
-ELAPSED_HOURS=$(( (NOW_EPOCH - START_EPOCH) / 3600 ))
-export ELAPSED_HOURS  # available inside phase_*_check
+__lib="$(dirname "$0")/lib/watcher-base.sh"
+[[ -r "$__lib" ]] || __lib="$HOME/lib/watcher-base.sh"
+# shellcheck disable=SC1090  # dynamic path; resolved at runtime
+source "$__lib"
+unset __lib
+# (First path resolves when running from the repo checkout; second path
+# resolves on Sydney when the lib is deployed alongside the watcher.)
 
 # ============================================================================
-# FILL-IN 3 — phase_a_check: detect "condition flipped"
+# FILL-IN 2 — phase_a_check: detect "condition flipped"
 # ============================================================================
 # Contract:
 #   return 0  → condition met. Caller transitions to phase B.
 #               You SHOULD have called `tg "..."` before returning 0.
-#   return 1  → still waiting. Caller exits cleanly; cron retries next cycle.
-#   return 2  → transient error (e.g. API timeout). Caller exits cleanly.
-#               Use this when you can't tell yet whether the condition is met.
+#   return 1  → still waiting. Cron retries next cycle.
+#   return 2  → transient error (e.g. API timeout). Cron retries next cycle.
 #
-# Available globals: $ELAPSED_HOURS, $LOG_FILE, log(), tg().
-#
-# Optional pattern: 24h heartbeat warning. If your watch may run for days,
-# fire a one-shot warning at 24h to flag stuck watchers. Example commented
-# at the bottom of this template.
+# Available globals: $ELAPSED_HOURS, $LOG_FILE, $CONFIG_DIR; functions log(), tg().
 phase_a_check() {
     log "phase_a_check: replace me"
     return 1
 }
 
 # ============================================================================
-# FILL-IN 4 — phase_b_check: detect "target materialized"
+# FILL-IN 3 — phase_b_check: detect "target materialized"
 # ============================================================================
 # Same contract as phase_a_check. On return 0, the caller notifies (you've
 # already called tg in your function), then self-disables cron.
@@ -134,42 +77,9 @@ phase_b_check() {
 }
 
 # ============================================================================
-# State machine (don't edit)
+# Run the state machine (don't edit)
 # ============================================================================
-PHASE=$(cat "$STATE_FILE" 2>/dev/null || echo "A")
-
-case "$PHASE" in
-    A)
-        log "phase=A"
-        rc=0
-        phase_a_check || rc=$?
-        case "$rc" in
-            0) echo "B" > "$STATE_FILE"; log "A → B" ;;
-            1) ;;  # still waiting
-            2) ;;  # transient error, logged by check
-            *) log "phase_a_check returned unexpected rc=$rc; treating as waiting" ;;
-        esac
-        ;;
-    B)
-        log "phase=B"
-        rc=0
-        phase_b_check || rc=$?
-        case "$rc" in
-            0) echo "DONE" > "$STATE_FILE"; self_disable; log "B → DONE" ;;
-            1) ;;
-            2) ;;
-            *) log "phase_b_check returned unexpected rc=$rc; treating as waiting" ;;
-        esac
-        ;;
-    DONE)
-        log "phase=DONE; cron entry should be removed (running anyway means self_disable failed earlier)"
-        self_disable  # idempotent retry
-        ;;
-    *)
-        log "unknown phase=$PHASE; resetting to A"
-        echo "A" > "$STATE_FILE"
-        ;;
-esac
+run_watcher
 
 # ============================================================================
 # Optional: 24h heartbeat warning (paste into phase_a_check if your watch
