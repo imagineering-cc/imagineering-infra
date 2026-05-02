@@ -11,6 +11,12 @@
 # When upstream ships a release that includes that fix, we can drop our
 # workaround. This watcher catches "new release shipped, go check."
 #
+# CAVEAT: first run silently records the *current* latest tag as baseline.
+# This watcher only catches *future* releases — releases that already
+# shipped before deploy are missed. Deploy promptly after creating, or
+# pre-seed $BASELINE_FILE with an older tag if you want to be alerted
+# about a release that already happened.
+#
 # Cron: 41 7 * * * /home/ubuntu/kanbn-upstream-watch.sh  # kanbn-upstream-watch
 # (Once daily, off the hour. Releases land infrequently.)
 
