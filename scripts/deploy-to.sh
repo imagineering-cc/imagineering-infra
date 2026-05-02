@@ -127,6 +127,12 @@ deploy_invite() {
     # Static QR-code slide / shareable join URL served at invite.imagineering.cc.
     # Source lives in this repo (unlike deploy_site which pulls from a separate
     # website/ repo), so we rsync straight from $REPO_ROOT/invite.
+    #
+    # Destination is ~/apps/invite (NOT /srv/invite) — the Caddy container
+    # bind-mounts /home/nick/apps/invite -> /srv/invite:ro at the path the
+    # Caddyfile references. See caddy/docker-compose.yml. Same convention as
+    # the existing /home/nick/apps/site mount. (deploy_site itself currently
+    # writes to /srv/site, which is a pre-existing bug — tracked separately.)
     local INVITE_SRC="$REPO_ROOT/invite"
 
     if [ ! -d "$INVITE_SRC" ]; then
@@ -135,9 +141,9 @@ deploy_invite() {
     fi
 
     echo "Deploying invite.imagineering.cc..."
-    ssh "$REMOTE" "mkdir -p /srv/invite"
-    rsync -avz --delete "$INVITE_SRC/" "$REMOTE":/srv/invite/
-    echo "Invite deployed to /srv/invite"
+    ssh "$REMOTE" "mkdir -p ~/apps/invite"
+    rsync -avz --delete "$INVITE_SRC/" "$REMOTE":apps/invite/
+    echo "Invite deployed to ~/apps/invite (mounted into Caddy as /srv/invite)"
 }
 
 deploy_contact() {
