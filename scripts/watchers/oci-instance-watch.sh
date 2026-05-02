@@ -12,10 +12,20 @@
 #          than expected → 🚨 (names the affected profile + delta).
 # Phase B: all back to expected counts → ✅, self-disable.
 #
-# Expected (probed 2026-05-02, see Task #3):
-#   ROBIN     → 1 (robins-oci)
-#   NICK_MEL  → 1 (nick-mel)
-#   CANDEIRA  → 1 (candeira-server)
+# Expected (probed 2026-05-02):
+#   NICK_MEL  → 1 (nick-mel) — Nick's Melbourne instance
+#
+# Initially monitored 3 tenancies (ROBIN, NICK_MEL, CANDEIRA) — those
+# happened to be the OCI profiles on the Sydney box. But ROBIN is Robin
+# Langer's tenancy and CANDEIRA is Javier's; only NICK_MEL is Nick's.
+# Trimmed to Nick-only on 2026-05-02 to avoid 🚨'ing Nick about other
+# people's instances.
+#
+# This watcher cannot watch Sydney itself (it runs ON Sydney — chicken
+# and egg). Sydney's OCI tenancy is undocumented and isn't represented
+# in /home/ubuntu/.oci/config. Future work: set up a peer watcher on
+# Melbourne (nick-mel) that monitors Sydney from outside. Tracked as a
+# follow-up task.
 #
 # Cron: 13 */2 * * * /home/ubuntu/oci-instance-watch.sh  # oci-instance-watch
 # (Every 2 hours, off the hour. Instance state changes infrequently;
@@ -38,9 +48,7 @@ export PATH="$HOME/bin:$PATH"   # oci CLI lives in ~/bin on Sydney
 
 # Per-tenancy: PROFILE|TENANCY_OCID|EXPECTED_RUNNING_COUNT
 TENANCIES=(
-    "ROBIN|ocid1.tenancy.oc1..aaaaaaaahxhhvg2c6gjysxntctjltkaibafrau6cbbqhfwl44a6aoqmwod2q|1"
     "NICK_MEL|ocid1.tenancy.oc1..aaaaaaaa53sr57ghje45q5lkvqunbxbh45imq4rfblzsqvf7vk7y4sjait2a|1"
-    "CANDEIRA|ocid1.tenancy.oc1..aaaaaaaadqcorb5w3be4yqmuln65bqkzgbvpyf5drvcxb6tlgvc7gcfvggoa|1"
 )
 
 # Echoes "<profile>:<actual>:<expected>" per tenancy.
