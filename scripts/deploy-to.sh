@@ -128,7 +128,10 @@ deploy_site() {
 
     echo "Deploying imagineering.cc landing page..."
     ssh "$REMOTE" "mkdir -p ~/apps/site"
-    rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'README.md' "$SITE_SRC/" "$REMOTE":apps/site/
+    # --exclude '.*' skips ALL dotfile entries (.git, .github, .claude,
+    # .playwright-mcp, etc.). Replaces the previous narrow excludes which
+    # missed Claude/Playwright artefacts. README.md stays excluded explicitly.
+    rsync -avz --delete --exclude '.*' --exclude 'README.md' "$SITE_SRC/" "$REMOTE":apps/site/
     echo "Site deployed to ~/apps/site (mounted into Caddy as /srv/site)"
 }
 
