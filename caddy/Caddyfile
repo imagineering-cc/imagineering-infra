@@ -51,6 +51,13 @@ imagineering.cc {
     }
 }
 
+# --- Invite page (QR slide for meetups + shareable join URL) ---
+
+invite.imagineering.cc {
+    root * /srv/invite
+    file_server
+}
+
 # --- Dreamfinder API ---
 
 dreamfinder.imagineering.cc {

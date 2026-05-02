@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|downstream-server|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|downstream-server|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -121,6 +121,23 @@ deploy_site() {
     ssh "$REMOTE" "mkdir -p /srv/site"
     rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'README.md' "$SITE_SRC/" "$REMOTE":/srv/site/
     echo "Site deployed to /srv/site"
+}
+
+deploy_invite() {
+    # Static QR-code slide / shareable join URL served at invite.imagineering.cc.
+    # Source lives in this repo (unlike deploy_site which pulls from a separate
+    # website/ repo), so we rsync straight from $REPO_ROOT/invite.
+    local INVITE_SRC="$REPO_ROOT/invite"
+
+    if [ ! -d "$INVITE_SRC" ]; then
+        echo "ERROR: invite/ not found at $INVITE_SRC"
+        return 1
+    fi
+
+    echo "Deploying invite.imagineering.cc..."
+    ssh "$REMOTE" "mkdir -p /srv/invite"
+    rsync -avz --delete "$INVITE_SRC/" "$REMOTE":/srv/invite/
+    echo "Invite deployed to /srv/invite"
 }
 
 deploy_contact() {
@@ -1045,6 +1062,7 @@ case $SERVICE in
         deploy_backups
         deploy_service caddy
         deploy_site
+        deploy_invite
         deploy_outline
         deploy_kanbn
         deploy_radicale
@@ -1079,6 +1097,9 @@ case $SERVICE in
         ;;
     site)
         deploy_site
+        ;;
+    invite)
+        deploy_invite
         ;;
     imagineering-contact-us|contact)
         deploy_contact
@@ -1115,7 +1136,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|downstream-server|backups|scripts|site]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|downstream-server|backups|scripts|site|invite]"
         exit 1
         ;;
 esac
