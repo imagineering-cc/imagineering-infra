@@ -1,0 +1,5 @@
+#!/bin/sh
+# Read-only diagnostic: last 100 lines of caddy container output.
+# Invoked via sudoers NOPASSWD entry by cert-expiry-watch.sh.
+# Caller is responsible for further filtering (e.g. grep cert/renew).
+exec /usr/bin/docker logs --tail 100 caddy 2>&1

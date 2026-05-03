@@ -110,3 +110,67 @@ html_escape() {
     s="${s//>/&gt;}"
     printf '%s' "$s"
 }
+
+# strip_ansi
+#   Reads stdin, writes stdout with ANSI color/SGR escape sequences
+#   removed. Useful for log files that contain shell color codes
+#   (backup.log uses them) before inclusion in a Telegram <pre> block.
+strip_ansi() {
+    sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g'
+}
+
+# --- sudo-wrapper helpers ----------------------------------------------------
+# These call read-only wrapper scripts at /usr/local/bin/watcher-diag-*,
+# whitelisted via /etc/sudoers.d/watcher-diag for NOPASSWD. The wrappers
+# live in scripts/watchers/sudo-helpers/ in the repo. If sudo isn't
+# available or the wrapper is missing, helpers fail-soft with a clear
+# placeholder so the watcher still fires its primary alert.
+
+# tail_backup_log
+#   Last 50 lines of /home/nick/logs/backup.log, ANSI-stripped.
+#   Distinguishes "backup ran but failed" from "backup never started" —
+#   the most useful single addition to backup-recency alerts.
+tail_backup_log() {
+    if ! sudo -n -l /usr/local/bin/watcher-diag-backup-tail >/dev/null 2>&1; then
+        echo "(no sudoers entry for watcher-diag-backup-tail — see scripts/watchers/sudo-helpers/README.md)"
+        return 0
+    fi
+    sudo -n /usr/local/bin/watcher-diag-backup-tail 2>&1 | strip_ansi | tail -20
+}
+
+# docker_df_summary
+#   `docker system df` formatted as TYPE/TOTAL/SIZE/RECLAIMABLE table.
+#   Surfaces "disk full because of docker bloat" cases, which the
+#   filesystem-level top_dirs/top_files probes hide (everything's in
+#   /var/lib/docker/overlay2 and looks like one giant blob).
+docker_df_summary() {
+    if ! sudo -n -l /usr/local/bin/watcher-diag-docker-df >/dev/null 2>&1; then
+        echo "(no sudoers entry for watcher-diag-docker-df)"
+        return 0
+    fi
+    sudo -n /usr/local/bin/watcher-diag-docker-df 2>&1 | head -10
+}
+
+# caddy_renew_log
+#   Last ~10 cert/renewal-related lines from caddy container logs. Tells
+#   you whether Caddy thinks renewal is happening (and what failed if
+#   anything), without an ssh round-trip.
+caddy_renew_log() {
+    if ! sudo -n -l /usr/local/bin/watcher-diag-caddy-logs >/dev/null 2>&1; then
+        echo "(no sudoers entry for watcher-diag-caddy-logs)"
+        return 0
+    fi
+    # Filter to ACME/cert-related lines specifically. The generic 'error'
+    # keyword is intentionally excluded — Caddy logs every 502 to a backend
+    # as "error", and those are not cert problems. ACME-related Caddy
+    # logs are reliably tagged with cert/renew/acme/issuance/tls.cache.
+    local out
+    out=$(sudo -n /usr/local/bin/watcher-diag-caddy-logs 2>&1 \
+          | grep -iE 'cert|renew|acme|issuance|tls\.cache' \
+          | tail -10) || true
+    if [[ -z "$out" ]]; then
+        echo "(no cert/renew/acme/issuance/tls.cache lines in last 100 caddy log lines)"
+    else
+        echo "$out"
+    fi
+}

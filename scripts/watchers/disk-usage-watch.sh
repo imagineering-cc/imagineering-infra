@@ -53,12 +53,13 @@ phase_a_check() {
     usage=$(root_usage_pct)
     log "phase_a: usage=${usage}%"
     if [[ "$usage" -ge 85 ]]; then
-        local dirs files
+        local dirs files docker_df
         dirs=$(top_dirs)
         files=$(top_single_files)
+        docker_df=$(docker_df_summary)
         local msg
-        msg=$(printf '🚨 <b>Sydney disk at %s%%</b>\n\nTop directories visible to %s:\n<pre>%s</pre>\nLargest single files:\n<pre>%s</pre>\n<i>Watcher will notify again on recovery (&lt;75%%) and self-disable.</i>' \
-              "$usage" "${USER:-unknown}" "$dirs" "$files")
+        msg=$(printf '🚨 <b>Sydney disk at %s%%</b>\n\nTop directories visible to %s:\n<pre>%s</pre>\nLargest single files:\n<pre>%s</pre>\nDocker storage:\n<pre>%s</pre>\n<i>Watcher will notify again on recovery (&lt;75%%) and self-disable.</i>' \
+              "$usage" "${USER:-unknown}" "$dirs" "$files" "$docker_df")
         tg "$msg"
         return 0
     fi
