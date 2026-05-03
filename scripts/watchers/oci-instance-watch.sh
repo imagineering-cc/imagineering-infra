@@ -22,10 +22,10 @@
 # people's instances.
 #
 # This watcher cannot watch Sydney itself (it runs ON Sydney — chicken
-# and egg). Sydney's OCI tenancy is undocumented and isn't represented
-# in /home/ubuntu/.oci/config. Future work: set up a peer watcher on
-# Melbourne (nick-mel) that monitors Sydney from outside. Tracked as a
-# follow-up task.
+# and egg). Sydney is watched from outside by oci-instance-watch-
+# melbourne.sh, which runs on nick-mel via a SYDNEY profile keyed
+# against Nick's user in Sydney's tenancy (gaylejewson@gmail.com,
+# created 2026-03-18). Set up 2026-05-03.
 #
 # Cron: 13 */2 * * * /home/ubuntu/oci-instance-watch.sh  # oci-instance-watch
 # (Every 2 hours, off the hour. Instance state changes infrequently;
