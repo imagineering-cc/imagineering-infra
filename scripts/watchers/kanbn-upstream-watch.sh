@@ -33,6 +33,12 @@ __lib="$(dirname "$0")/lib/watcher-base.sh"
 source "$__lib"
 unset __lib
 
+__diag="$(dirname "$0")/lib/diagnose.sh"
+[[ -r "$__diag" ]] || __diag="$HOME/lib/diagnose.sh"
+# shellcheck disable=SC1090
+source "$__diag"
+unset __diag
+
 REPO="kanbn/kan"
 BASELINE_FILE="$CONFIG_DIR/$WATCHER_NAME.baseline"
 
@@ -64,8 +70,13 @@ phase_a_check() {
     log "phase_a: current=$current baseline=$baseline"
 
     if [[ "$current" != "$baseline" ]]; then
-        tg "$(printf '🆕 <b>kanbn/kan released %s</b> (was %s)\n\n<a href="https://github.com/%s/releases/tag/%s">Release notes</a>\n\nCheck if it includes the <code>card_activity.attachmentId</code> migration — if so, we can drop our manual patch.' \
-              "$current" "$baseline" "$REPO" "$current")"
+        # Inline release notes preview (~500 chars) so the alert tells you
+        # immediately whether this release is the one with the migration
+        # fix you've been waiting for, without an extra GitHub round-trip.
+        local notes
+        notes=$(github_release_notes "$REPO" "$current" 500)
+        tg "$(printf '🆕 <b>kanbn/kan released %s</b> (was %s)\n\n<a href="https://github.com/%s/releases/tag/%s">Release notes</a>\n\n<pre>%s</pre>\n\nCheck if it includes the <code>card_activity.attachmentId</code> migration — if so, we can drop our manual patch.' \
+              "$current" "$baseline" "$REPO" "$current" "$notes")"
         echo "$current" > "$BASELINE_FILE"
         return 0
     fi
