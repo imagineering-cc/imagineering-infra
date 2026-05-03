@@ -22,10 +22,26 @@ __lib="$(dirname "$0")/lib/watcher-base.sh"
 source "$__lib"
 unset __lib
 
+__diag="$(dirname "$0")/lib/diagnose.sh"
+[[ -r "$__diag" ]] || __diag="$HOME/lib/diagnose.sh"
+# shellcheck disable=SC1090
+source "$__diag"
+unset __diag
+
 # Watcher-specific helpers
 root_usage_pct() { df / | awk 'NR==2 { gsub("%",""); print $5 }'; }
 top_dirs() {
     du -sh /var/log/* /home/* /tmp/* /var/lib/* /opt/* 2>/dev/null | sort -rh | head -5
+}
+# Top single files anywhere ubuntu can read — adds a "what one file is
+# eating the disk" view that top_dirs (sums) can hide. Largest offenders
+# are typically log files, journal segments, or stray downloads.
+top_single_files() {
+    {
+        top_files /var/log 5
+        top_files /tmp 5
+        top_files /home 5
+    } | sort -rh -k1,1 | head -5
 }
 
 # Warn-file for the "still climbing" tier in Phase B. Gates the second-fire
@@ -37,11 +53,12 @@ phase_a_check() {
     usage=$(root_usage_pct)
     log "phase_a: usage=${usage}%"
     if [[ "$usage" -ge 85 ]]; then
-        local dirs
+        local dirs files
         dirs=$(top_dirs)
+        files=$(top_single_files)
         local msg
-        msg=$(printf '🚨 <b>Sydney disk at %s%%</b>\n\nTop directories visible to %s:\n<pre>%s</pre>\n\n<i>Watcher will notify again on recovery (&lt;75%%) and self-disable.</i>' \
-              "$usage" "${USER:-unknown}" "$dirs")
+        msg=$(printf '🚨 <b>Sydney disk at %s%%</b>\n\nTop directories visible to %s:\n<pre>%s</pre>\nLargest single files:\n<pre>%s</pre>\n<i>Watcher will notify again on recovery (&lt;75%%) and self-disable.</i>' \
+              "$usage" "${USER:-unknown}" "$dirs" "$files")
         tg "$msg"
         return 0
     fi

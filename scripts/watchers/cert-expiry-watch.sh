@@ -31,6 +31,12 @@ __lib="$(dirname "$0")/lib/watcher-base.sh"
 source "$__lib"
 unset __lib
 
+__diag="$(dirname "$0")/lib/diagnose.sh"
+[[ -r "$__diag" ]] || __diag="$HOME/lib/diagnose.sh"
+# shellcheck disable=SC1090
+source "$__diag"
+unset __diag
+
 WARN_DAYS=14
 SAFE_DAYS=30
 
@@ -83,9 +89,14 @@ phase_a_check() {
     warning=$(awk -F: -v t="$WARN_DAYS" '$2 < t { print }' <<< "$lines")
     log "phase_a: probed=$probed_count under_${WARN_DAYS}d=$(nlines "$warning")"
     if [[ -n "$warning" ]]; then
-        local pretty
+        local pretty acme
         pretty=$(awk -F: '{ printf "  %s: %sd\n", $1, $2 }' <<< "$warning")
-        tg "$(printf '🚨 <b>Caddy cert(s) near expiry</b> (auto-renew may have stalled)\n\n<pre>%s</pre>\n\nCheck <code>docker logs caddy 2&gt;&amp;1 | tail -100</code> on Sydney for renewal errors.' "$pretty")"
+        # ACME reachability diagnostic: distinguishes "Caddy can't talk
+        # to Let's Encrypt" (network/firewall) from "Caddy reaches LE
+        # but renewal still fails" (account/cert-config issue). One curl,
+        # ~5s budget, included inline.
+        acme=$(html_escape "$(acme_probe)")
+        tg "$(printf '🚨 <b>Caddy cert(s) near expiry</b> (auto-renew may have stalled)\n\n<pre>%s</pre>\nACME endpoint reachability: <code>%s</code>\n\nCheck <code>docker logs caddy 2&gt;&amp;1 | tail -100</code> on Sydney for renewal errors.' "$pretty" "$acme")"
         return 0
     fi
     return 1
