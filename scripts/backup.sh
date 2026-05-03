@@ -10,7 +10,7 @@ RETENTION_DAYS=7
 FAILED_SERVICES=()
 
 # GitHub backup config
-GITHUB_BACKUP_REPO="git@github-backups:imagineering-cc/imagineering-backups.git"
+GITHUB_BACKUP_REPO="git@github-imagineering-backups:imagineering-cc/imagineering-backups.git"
 GITHUB_BACKUP_DIR="/tmp/imagineering-backups"
 GITHUB_REPO_SIZE_ALERT_MB=500
 
@@ -68,8 +68,15 @@ backup_pm_bot() {
 
   local backup_file="$BACKUP_DIR/pm-bot-$DATE.db"
 
-  # Copy SQLite database from container volume
-  docker cp dreamfinder:/app/data/kan-bot.db "$backup_file"
+  # Copy SQLite database from container volume.
+  # Path is /app/data/bot.db (was kan-bot.db from an earlier rename;
+  # docker cp silently produces an empty/wrong file on path mismatch
+  # which is why this bug went undetected — fail loudly instead).
+  if ! docker cp dreamfinder:/app/data/bot.db "$backup_file"; then
+    error "Dreamfinder docker cp failed — backup file is incomplete or missing"
+    rm -f "$backup_file"
+    return 1
+  fi
 
   log "Dreamfinder backup complete: pm-bot-$DATE.db"
 }
@@ -162,14 +169,17 @@ backup_downstream_server() {
 backup_to_github() {
   local services=("$@")
 
-  # Check prerequisites
+  # Check prerequisites. Both error returns are 1 (not 0) so the caller's
+  # FAILED_SERVICES tracking captures the failure — a missing deploy key
+  # silently producing local-only backups for weeks (caught 2026-05-03)
+  # is exactly the failure mode this script must surface.
   if ! command -v git &> /dev/null; then
-    error "git not installed, skipping GitHub backup"
-    return 0
+    error "git not installed, GitHub backup failed"
+    return 1
   fi
   if [ ! -f "$HOME/.ssh/imagineering-backups-deploy" ]; then
-    error "Deploy key not found at ~/.ssh/imagineering-backups-deploy, skipping GitHub backup"
-    return 0
+    error "Deploy key not found at ~/.ssh/imagineering-backups-deploy, GitHub backup failed"
+    return 1
   fi
 
   log "Pushing backups to GitHub..."
@@ -253,7 +263,7 @@ case $SERVICE in
       fi
     done
     if [ ${#SUCCEEDED[@]} -gt 0 ]; then
-      backup_to_github "${SUCCEEDED[@]}"
+      backup_to_github "${SUCCEEDED[@]}" || FAILED_SERVICES+=("github-upload")
     fi
     cleanup_old_backups
     ;;
