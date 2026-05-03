@@ -1,0 +1,12 @@
+# NOPASSWD whitelist for diagnostic-enrichment helpers in
+# scripts/watchers/lib/diagnose.sh. Each line points at a wrapper
+# script in /usr/local/bin/ — never a raw command. Wrappers take no
+# arguments to eliminate any "wrong flag passed" failure mode.
+#
+# Source of truth: scripts/watchers/sudo-helpers/ in imagineering-infra.
+# Re-install via the procedure in that directory's README.md when
+# adding/modifying wrappers.
+
+ubuntu ALL=(root) NOPASSWD: /usr/local/bin/watcher-diag-backup-tail
+ubuntu ALL=(root) NOPASSWD: /usr/local/bin/watcher-diag-docker-df
+ubuntu ALL=(root) NOPASSWD: /usr/local/bin/watcher-diag-caddy-logs

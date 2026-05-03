@@ -1,0 +1,4 @@
+#!/bin/sh
+# Read-only diagnostic: docker storage breakdown.
+# Invoked via sudoers NOPASSWD entry by disk-usage-watch.sh.
+exec /usr/bin/docker system df

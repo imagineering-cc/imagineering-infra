@@ -31,6 +31,12 @@ __lib="$(dirname "$0")/lib/watcher-base.sh"
 source "$__lib"
 unset __lib
 
+__diag="$(dirname "$0")/lib/diagnose.sh"
+[[ -r "$__diag" ]] || __diag="$HOME/lib/diagnose.sh"
+# shellcheck disable=SC1090
+source "$__diag"
+unset __diag
+
 BACKUP_DIR="/tmp/backups"
 STALE_HOURS=25
 
@@ -71,8 +77,14 @@ phase_a_check() {
         local last_iso
         last_iso=$(date -u -d "@$epoch" +"%Y-%m-%dT%H:%MZ" 2>/dev/null \
                 || date -u -r "$epoch" +"%Y-%m-%dT%H:%MZ")
-        # shellcheck disable=SC2016  # $(pgrep …) is literal; intended to be copy-pasted on Sydney by the reader
-        tg "$(printf '🚨 <b>Backup stale: %sh since last artifact</b>\n\nLatest file in <code>%s</code>: <code>%s</code>.\nDaily 4am backup likely failed. Check <code>/home/nick/logs/backup.log</code> + <code>journalctl _PID=$(pgrep -f backup.sh)</code> on Sydney.' "$hours_old" "$BACKUP_DIR" "$last_iso")"
+        # Tail of backup.log: distinguishes "backup ran and failed
+        # mid-stream" from "backup never started" — the difference
+        # determines whether you go look at backup.sh internals (failed)
+        # or cron/systemd-timer (never started).
+        local log_tail
+        log_tail=$(html_escape "$(tail_backup_log)")
+        # shellcheck disable=SC2016  # $(pgrep …) in the message body is literal; intended to be copy-pasted on Sydney by the reader
+        tg "$(printf '🚨 <b>Backup stale: %sh since last artifact</b>\n\nLatest file in <code>%s</code>: <code>%s</code>.\n\nLast lines of <code>backup.log</code>:\n<pre>%s</pre>\n\nIf the log shows nothing recent, cron/systemd-timer didn'"'"'t fire. Otherwise look at backup.sh internals.' "$hours_old" "$BACKUP_DIR" "$last_iso" "$log_tail")"
         return 0
     fi
     return 1

@@ -89,14 +89,18 @@ phase_a_check() {
     warning=$(awk -F: -v t="$WARN_DAYS" '$2 < t { print }' <<< "$lines")
     log "phase_a: probed=$probed_count under_${WARN_DAYS}d=$(nlines "$warning")"
     if [[ -n "$warning" ]]; then
-        local pretty acme
+        local pretty acme caddy_log
         pretty=$(awk -F: '{ printf "  %s: %sd\n", $1, $2 }' <<< "$warning")
         # ACME reachability diagnostic: distinguishes "Caddy can't talk
         # to Let's Encrypt" (network/firewall) from "Caddy reaches LE
         # but renewal still fails" (account/cert-config issue). One curl,
         # ~5s budget, included inline.
         acme=$(html_escape "$(acme_probe)")
-        tg "$(printf '🚨 <b>Caddy cert(s) near expiry</b> (auto-renew may have stalled)\n\n<pre>%s</pre>\nACME endpoint reachability: <code>%s</code>\n\nCheck <code>docker logs caddy 2&gt;&amp;1 | tail -100</code> on Sydney for renewal errors.' "$pretty" "$acme")"
+        # Recent Caddy renewal log lines: surfaces the actual reason
+        # renewal stalled (rate limit, account problem, DNS challenge
+        # timeout). Filtered to cert/renew/acme/error keywords.
+        caddy_log=$(html_escape "$(caddy_renew_log)")
+        tg "$(printf '🚨 <b>Caddy cert(s) near expiry</b> (auto-renew may have stalled)\n\n<pre>%s</pre>\nACME endpoint reachability: <code>%s</code>\n\nRecent caddy log (cert/renew/acme/error):\n<pre>%s</pre>' "$pretty" "$acme" "$caddy_log")"
         return 0
     fi
     return 1

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Read-only diagnostic: last 50 lines of backup.log.
+# Invoked via sudoers NOPASSWD entry by backup-recency-watch.sh.
+exec /usr/bin/tail -n 50 /home/nick/logs/backup.log
