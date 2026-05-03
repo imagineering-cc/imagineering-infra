@@ -42,15 +42,58 @@ The OCI instance has decent resources (24GB RAM, 4 vCPU) but running many `docke
 
 ## Services
 
+Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, ports 30xx/90xx) and co-located **xdeca** services (bare names, original 30xx/9000). Caddy routes by hostname.
+
+### Imagineering (public)
+
 | Service | Port | URL | Description |
 |---------|------|-----|-------------|
-| Caddy | 80/443 | - | Reverse proxy, auto-TLS |
-| Kan.bn | 3003 | kan.imagineering.cc | Kanban boards (Trello-like) |
-| Dreamfinder (pm-bot) | - | Matrix | AI project management bot |
-| Outline | 3002 | outline.imagineering.cc | Team wiki (Notion-like) |
-| MinIO | 9000 | storage.imagineering.cc | S3-compatible file storage |
-| Radicale | 5232 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
+| Caddy | 80/443 | - | Reverse proxy, auto-TLS via Let's Encrypt |
+| img-outline | 3012 | outline.imagineering.cc | Team wiki (Notion-like) |
+| (img-outline-minio) | 9010 | storage.imagineering.cc | S3-compatible file storage for img-outline |
+| (img-kanbn — see xdeca) | 3003 | kan.imagineering.cc | Kanban — currently shares xdeca's kanbn instance |
+| Radicale | 5232/5233 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
+| matrix-continuwuity | 8008 | matrix.imagineering.cc | Matrix homeserver (Conduit fork) |
+| (matrix bridges) | - | - | mautrix-signal/whatsapp/telegram/discord, plus relay-bot + relay-bot-hf |
+| Dreamfinder (pm-bot) | 8081 | dreamfinder.imagineering.cc | Matrix-based AI project management bot |
+| embodied-dreamfinder | 3015 | df.imagineering.cc | 3D avatar voice frontend |
+| symposium | 3016 | symposium.imagineering.cc | Discussion/event space |
+| livekit | - | livekit.imagineering.cc | WebRTC SFU (TURN/TLS at :5349 currently disabled — see memory) |
+| youtube-rag | 3010/8010 | rag.imagineering.cc, rag-api.imagineering.cc | YouTube transcript RAG (frontend + backend + chroma) |
+| img-contact | 3014 | invite.imagineering.cc | Contact-form / QR invite landing |
 | Claudius | - | - | Headless email-polling Claude Code agent |
+
+### Imagineering (internal — bound to 127.0.0.1, Caddy-fronted, Bearer auth)
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| notify | 8090 | notify.imagineering.cc | Telegram-send proxy for any service/script. POST `{message, parse_mode?}` with `Authorization: Bearer $NOTIFY_API_KEY`. See `project_notify_service.md`. |
+| img-familiars-server | 3019 | familiars.imagineering.cc | Familiars (avatar/character) backend |
+| img-downstream-server | 3018 | - | Downstream API server |
+
+### Tech World (own subdomain, separate fleet)
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| tw-clawd, tw-dreamfinder, tw-gremlin | 8080 (internal) | world.imagineering.cc | Three Tech-World bots (Discord/Matrix/Telegram facades) |
+
+### Co-located xdeca services
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| outline (xdeca) | 3002 | kb.xdeca.com / wiki.xdeca.com | Team wiki for xdeca |
+| outline_minio | 9000 | storage.xdeca.com | S3-compatible storage for xdeca outline |
+| kanbn | 3003 | tasks.xdeca.com | Kanban for xdeca (also fronts kan.imagineering.cc) |
+| radicale (xdeca) | 5233 | dav.xdeca.com | xdeca CalDAV/CardDAV |
+| Gremlin | - | gremlin.xdeca.com | xdeca Telegram bot (webhook mode) |
+
+### Operational
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| watchtower | - | - | Auto-pulls new container images |
+| lugh | - | - | Auxiliary worker |
+| callonclare-n8n | 5678 | - | n8n workflow automation (call-on-clare project) |
 
 ## Container Architecture
 
