@@ -536,21 +536,26 @@ deploy_embodied_dreamfinder() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
+    # NOTE: inner double-quotes inside the yq template MUST be backslash-escaped
+    # (`\"…\"`) — yq v4.50.1+ rejects unescaped inner quotes with
+    # `lexer: invalid input text`. See incident 2026-05-09 during
+    # DREAMFINDER_API_KEY rotation. Other deploy_* templates above don't
+    # have `// "default"` literals so they happen to work.
     sops -d "$EDF_SECRETS" | yq -r '"# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)
-AUTH_PASSWORD=\(.auth_password // "")
-AUTH_SECRET=\(.auth_secret // "")
-OPENAI_API_KEY=\(.openai_api_key // "")
-ANTHROPIC_API_KEY=\(.anthropic_api_key // "")
-VOICE_MODE=\(.voice_mode // "realtime")
-OUTLINE_API_KEY=\(.outline_api_key // "")
-RADICALE_CALENDAR_URL=\(.radicale_calendar_url // "")
-RADICALE_USERNAME=\(.radicale_username // "")
-RADICALE_PASSWORD=\(.radicale_password // "")
-DREAMFINDER_API_URL=\(.dreamfinder_api_url // "")
-DREAMFINDER_API_KEY=\(.dreamfinder_api_key // "")
-LIVEKIT_URL=\(.livekit_url // "")
-LIVEKIT_API_KEY=\(.livekit_api_key // "")
-LIVEKIT_API_SECRET=\(.livekit_api_secret // "")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+AUTH_PASSWORD=\(.auth_password // \"\")
+AUTH_SECRET=\(.auth_secret // \"\")
+OPENAI_API_KEY=\(.openai_api_key // \"\")
+ANTHROPIC_API_KEY=\(.anthropic_api_key // \"\")
+VOICE_MODE=\(.voice_mode // \"realtime\")
+OUTLINE_API_KEY=\(.outline_api_key // \"\")
+RADICALE_CALENDAR_URL=\(.radicale_calendar_url // \"\")
+RADICALE_USERNAME=\(.radicale_username // \"\")
+RADICALE_PASSWORD=\(.radicale_password // \"\")
+DREAMFINDER_API_URL=\(.dreamfinder_api_url // \"\")
+DREAMFINDER_API_KEY=\(.dreamfinder_api_key // \"\")
+LIVEKIT_URL=\(.livekit_url // \"\")
+LIVEKIT_API_KEY=\(.livekit_api_key // \"\")
+LIVEKIT_API_SECRET=\(.livekit_api_secret // \"\")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
