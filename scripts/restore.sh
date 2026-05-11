@@ -5,7 +5,8 @@
 #   service: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity
 #
 # Note: continuwuity requires the age private key path in $AGE_IDENTITY_FILE
-# (default: ~/.age/imagineering-backups.txt). Restoring continuwuity replaces
+# (default: ~/.config/sops/age/keys.txt — same file SOPS uses; age will try
+# each key in the file until one matches). Restoring continuwuity replaces
 # the live homeserver state — only do it on a fresh instance or after
 # confirming the existing state is unrecoverable.
 
@@ -25,7 +26,7 @@ log() { echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 warn() { echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"; }
 error() { echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2; }
 
-AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-$HOME/.age/imagineering-backups.txt}"
+AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}}"
 
 if [ -z "$SERVICE" ]; then
   echo "Usage: $0 <service>"
@@ -267,7 +268,8 @@ restore_matrix() {
 # deployment or when the live state is confirmed unrecoverable.
 #
 # Requires the age private key at $AGE_IDENTITY_FILE (default:
-# ~/.config/sops/age/keys.txt, matching the SOPS keychain location).
+# ~/.config/sops/age/keys.txt — same file SOPS uses). age will iterate
+# all private keys in the file until one matches the encrypted recipient.
 restore_continuwuity() {
   log "Restoring Continuwuity (partial — see notes at end)..."
 

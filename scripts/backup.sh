@@ -14,11 +14,9 @@ GITHUB_BACKUP_REPO="git@github-imagineering-backups:imagineering-cc/imagineering
 GITHUB_BACKUP_DIR="/tmp/imagineering-backups"
 GITHUB_REPO_SIZE_ALERT_MB=500
 
-# Continuwuity backup config. The age recipient (public key) is baked here;
-# the matching private key lives off-box (1Password) and is only needed for
-# restore. Decryption: `age -d -i <key> continuwuity.tar.gz.age | tar xzf -`.
-# The admin token is sourced at runtime from /etc/imagineering-secrets/matrix.env.
-AGE_RECIPIENT="${AGE_RECIPIENT:-}"
+# Continuwuity backup config. AGE_RECIPIENT and MATRIX_ADMIN_TOKEN are
+# sourced at runtime from MATRIX_ADMIN_SECRETS_FILE (see backup_continuwuity).
+# Decryption: `age -d -i <key> continuwuity.tar.gz.age | tar xzf -`.
 MATRIX_ADMIN_SECRETS_FILE="/etc/imagineering-secrets/matrix.env"
 CONTINUWUITY_ADMIN_ROOM='!L8ZmuakjgpeL1P3Jl8:imagineering.cc'
 CONTINUWUITY_HOMESERVER='https://matrix.imagineering.cc'
@@ -232,12 +230,13 @@ backup_matrix() {
 }
 
 # Triggers Continuwuity's online RocksDB checkpoint via the admin API
-# (`!admin server backup-database`), waits for the checkpoint dir to land in
-# the matrix_continuwuity_backups volume, tars+age-encrypts it to the local
-# backup dir, then deletes the in-volume checkpoint so the next run starts
-# fresh. The checkpoint is hardlinks of SST files so it's fast and online —
-# Continuwuity stays available throughout. Encryption is critical: this
-# tarball contains the homeserver signing keys (irreplaceable identity).
+# (`!admin server backup-database`). Each run wipes the in-volume backup
+# dir first, then triggers the admin command which writes a fresh
+# checkpoint, then tars+age-encrypts the output. RocksDB BackupEngine
+# uses hardlinks back to the live SST files so the operation is fast
+# and online — Continuwuity stays available throughout. Encryption is
+# critical: this tarball contains the homeserver signing keys
+# (irreplaceable identity).
 backup_continuwuity() {
   log "Backing up Continuwuity..."
 
@@ -425,7 +424,7 @@ backup_to_github() {
     case "$dump" in
       *.tar.gz.age)
         # Encrypted opaque binary — pass through as-is. Git can't delta
-        # these; that's why we run prune_continuwuity_history afterwards.
+        # these; that's why prune_repo_history_if_needed runs afterwards.
         cp "$dump" "$GITHUB_BACKUP_DIR/${svc}.tar.gz.age"
         log "Copied $svc backup → ${svc}.tar.gz.age"
         ;;
