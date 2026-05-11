@@ -7,6 +7,12 @@ services:
     environment:
       CONTINUWUITY_SERVER_NAME: ${MATRIX_SERVER_NAME}
       CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
+      # Enables `!admin server backup-database` (RocksDB online checkpoint via
+      # hardlinks of SST files). Lives in a separate volume from the live
+      # database so the backup script can read it without touching the
+      # running RocksDB tree. The nightly /opt/scripts/backup.sh reads from
+      # the matrix_continuwuity_backups volume and prunes after tarring.
+      CONTINUWUITY_DATABASE_BACKUP_PATH: /var/lib/continuwuity-backups
       CONTINUWUITY_PORT: "6167"
       CONTINUWUITY_ADDRESS: "0.0.0.0"
       CONTINUWUITY_ALLOW_REGISTRATION: "true"
@@ -17,6 +23,7 @@ services:
       CONTINUWUITY_LOG: "info"
     volumes:
       - continuwuity_data:/var/lib/continuwuity
+      - continuwuity_backups:/var/lib/continuwuity-backups
     ulimits:
       nofile:
         soft: 1048567
@@ -94,6 +101,7 @@ services:
 
 volumes:
   continuwuity_data:
+  continuwuity_backups:
   telegram_data:
   discord_data:
   signal_data:

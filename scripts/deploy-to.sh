@@ -313,9 +313,15 @@ deploy_backups() {
         ssh "$REMOTE" 'ssh-keygen -t ed25519 -f ~/.ssh/imagineering-backups-deploy -N "" -C "imagineering-backups-deploy"'
     fi
 
-    # Configure SSH to use deploy key for the backup repo
+    # Configure SSH to use deploy key for the backup repo.
+    # NOTE: host alias is `github-imagineering-backups` (not `github-backups`)
+    # to avoid collision with the xdeca-backups deploy config which uses
+    # `Host github-backups`. Both files load via ~/.ssh/config's
+    # `Include config.d/*`; latest wins on duplicate aliases, breaking the
+    # other repo's deploy. Backup script's GITHUB_BACKUP_REPO URL must
+    # match this alias.
     ssh "$REMOTE" 'mkdir -p ~/.ssh/config.d && cat > ~/.ssh/config.d/imagineering-backups << '\''SSHEOF'\''
-Host github-backups
+Host github-imagineering-backups
     HostName github.com
     User git
     IdentityFile ~/.ssh/imagineering-backups-deploy
@@ -337,13 +343,55 @@ SSHEOF'
     echo "============================================"
     echo ""
 
+    # --- Continuwuity backup prerequisites ---
+    # `backup_continuwuity` needs the `age` binary to encrypt the tarball
+    # before pushing. apt is idempotent; reinstall is a no-op if present.
+    echo "Ensuring age is installed on $REMOTE..."
+    ssh "$REMOTE" "command -v age >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq age"
+
+    # --- Install matrix admin secrets (admin token + age recipient) ---
+    # Source-of-truth is matrix/secrets.yaml (SOPS-encrypted). We decrypt
+    # locally, scp a minimal env file to /tmp, then install it under
+    # /etc/imagineering-secrets/matrix.env (mode 0640 root:nick). The
+    # backup script sources it at runtime; no values touch the cron file.
+    local MATRIX_SECRETS="$REPO_ROOT/matrix/secrets.yaml"
+    if [ -f "$MATRIX_SECRETS" ] && sops -d "$MATRIX_SECRETS" | yq -e '.matrix_admin_token' > /dev/null 2>&1; then
+        echo "Installing /etc/imagineering-secrets/matrix.env..."
+        local ADMIN_TOKEN AGE_RECIPIENT
+        ADMIN_TOKEN=$(sops -d "$MATRIX_SECRETS" | yq -r '.matrix_admin_token')
+        AGE_RECIPIENT=$(sops -d "$MATRIX_SECRETS" | yq -r '.backup_age_recipient')
+        if [ "$ADMIN_TOKEN" = "CHANGE_ME" ] || [ -z "$ADMIN_TOKEN" ] || [ "$ADMIN_TOKEN" = "null" ]; then
+            echo "WARNING: matrix_admin_token is CHANGE_ME/null in $MATRIX_SECRETS"
+            echo "  Continuwuity nightly backup will fail until this is set."
+        fi
+        local MATRIX_SECRETS_TMP
+        MATRIX_SECRETS_TMP=$(mktemp)
+        {
+            printf 'MATRIX_ADMIN_TOKEN=%s\n' "$ADMIN_TOKEN"
+            printf 'AGE_RECIPIENT=%s\n'      "$AGE_RECIPIENT"
+        } > "$MATRIX_SECRETS_TMP"
+        chmod 0600 "$MATRIX_SECRETS_TMP"
+        scp -q "$MATRIX_SECRETS_TMP" "$REMOTE":/tmp/matrix.env
+        ssh "$REMOTE" "sudo mkdir -p /etc/imagineering-secrets && \
+            sudo install -m 0640 -o root -g nick /tmp/matrix.env /etc/imagineering-secrets/matrix.env && \
+            rm -f /tmp/matrix.env"
+        rm -f "$MATRIX_SECRETS_TMP"
+        echo "  Matrix envfile installed (mode 0640 root:nick)"
+    else
+        echo "NOTE: matrix_admin_token not found in $MATRIX_SECRETS — Continuwuity backup disabled"
+        echo "  Add matrix_admin_token + backup_age_recipient to matrix/secrets.yaml to enable"
+    fi
+
     echo "Backup configuration complete!"
     echo "  - GitHub backup: imagineering-cc/imagineering-backups (private repo)"
     echo "  - Deploy key: ~/.ssh/imagineering-backups-deploy"
     echo "  - Scripts: /opt/scripts/backup.sh, /opt/scripts/restore.sh"
+    echo "  - Matrix secrets: /etc/imagineering-secrets/matrix.env"
     echo "  - Cron: Daily at 4 AM"
     echo ""
     echo "Test with: ssh $REMOTE '/opt/scripts/backup.sh all'"
+    echo "Test individual: ssh $REMOTE '/opt/scripts/backup.sh matrix'"
+    echo "Test continuwuity: ssh $REMOTE '/opt/scripts/backup.sh continuwuity'"
 }
 
 deploy_outline() {
