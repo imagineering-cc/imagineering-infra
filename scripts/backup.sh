@@ -200,14 +200,13 @@ backup_matrix() {
     IFS=: read -r name volume dbfile <<< "$entry"
     local out="$BACKUP_DIR/${name}-$DATE.sql.gz"
 
-    # Mount volume read-only; install sqlite3 in the alpine container; dump
-    # to stdout. apk's quiet flags keep the log clean. The pipe to gzip
-    # happens on the host. If the dump fails or produces an empty file we
-    # remove the artifact so backup_to_github errors loudly rather than
-    # silently committing zero bytes.
-    if ! docker run --rm -v "${volume}:/data:ro" alpine sh -c \
-      "apk add -q --no-cache sqlite >/dev/null 2>&1 && \
-       sqlite3 -cmd '.timeout 5000' /data/${dbfile} .dump" 2>/dev/null \
+    # Mount volume read-only; dump to stdout via the pre-built
+    # sqlite-dumper:latest image (alpine + sqlite, built by deploy_backups).
+    # The pipe to gzip happens on the host. If the dump fails or produces
+    # an empty file we remove the artifact so backup_to_github errors
+    # loudly rather than silently committing zero bytes.
+    if ! docker run --rm -v "${volume}:/data:ro" sqlite-dumper:latest \
+      sqlite3 -cmd '.timeout 5000' "/data/${dbfile}" .dump 2>/dev/null \
        | gzip > "$out"; then
       error "${name} sqlite3 .dump failed"
       rm -f "$out"
@@ -355,6 +354,14 @@ prune_repo_history_if_needed() {
 
   log "Repo size ${total_mb}MB exceeds prune threshold ${threshold_mb}MB; collapsing history..."
 
+  # Capture pre-prune HEAD so we can push a tag that pins the old history.
+  # GitHub will keep the commits the tag references even after main no
+  # longer touches them — so old continuwuity blobs remain recoverable
+  # via `git checkout archive-YYYY-MM-DD` for any forensic need.
+  local old_head archive_tag
+  old_head=$(git -C "$repo" rev-parse HEAD)
+  archive_tag="archive-$DATE"
+
   # Create a fresh orphan branch with current files, replace main, push
   # force-with-lease. Only the cron writes here so collision is unlikely;
   # --force-with-lease is the safety belt that aborts if origin shifted.
@@ -366,11 +373,26 @@ prune_repo_history_if_needed() {
   git -C "$repo" \
     -c user.name="imagineering-backup" \
     -c user.email="backup@imagineering.cc" \
-    commit -m "backup $DATE (history pruned)"
+    commit -m "backup $DATE (history pruned; pre-prune HEAD at tag $archive_tag)"
   git -C "$repo" branch -D main 2>/dev/null || true
   git -C "$repo" branch -m main
+
+  # Tag the old HEAD before force-pushing the collapsed main. The tag
+  # push must succeed FIRST — otherwise the old commits become orphan
+  # candidates for GC on the GitHub side. If tag push fails, abort the
+  # prune rather than risk silent history loss.
+  if ! git -C "$repo" tag "$archive_tag" "$old_head" 2>&1 | tail -3; then
+    error "Failed to create archive tag $archive_tag; skipping prune"
+    return 1
+  fi
+  if ! git -C "$repo" push origin "$archive_tag" 2>&1 | tail -3; then
+    error "Failed to push archive tag $archive_tag to origin; skipping prune"
+    return 1
+  fi
+
   if git -C "$repo" push --force-with-lease origin main 2>&1 | tail -3; then
     log "Repo history pruned to single root commit ($(du -sm "$repo" | awk '{print $1}')MB)"
+    log "Pre-prune history preserved at tag $archive_tag (recover with: git checkout $archive_tag)"
   else
     error "Failed to force-push pruned history; manual intervention needed"
     return 1

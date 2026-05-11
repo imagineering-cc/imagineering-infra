@@ -349,6 +349,14 @@ SSHEOF'
     echo "Ensuring age is installed on $REMOTE..."
     ssh "$REMOTE" "command -v age >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq age"
 
+    # --- Build sqlite-dumper image for backup_matrix / restore_matrix ---
+    # Pre-installs sqlite in alpine so the per-bridge `apk add` overhead
+    # (~5s × 6 bridges = ~30s) is avoided on every nightly run.
+    # Local-only image; no registry push needed.
+    echo "Building sqlite-dumper image on $REMOTE..."
+    scp -q -r "$REPO_ROOT/scripts/sqlite-dumper" "$REMOTE":/tmp/sqlite-dumper
+    ssh "$REMOTE" "docker build -q -t sqlite-dumper:latest /tmp/sqlite-dumper && rm -rf /tmp/sqlite-dumper" | tail -1
+
     # --- Install matrix admin secrets (admin token + age recipient) ---
     # Source-of-truth is matrix/secrets.yaml (SOPS-encrypted). We decrypt
     # locally, scp a minimal env file to /tmp, then install it under

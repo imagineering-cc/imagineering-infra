@@ -233,12 +233,11 @@ restore_matrix() {
 
     log "  Restoring $name from ${name}.sql..."
     # Replace the existing DB with a fresh one populated from the dump.
-    # We pipe SQL through stdin into sqlite3 running inside an alpine
-    # container that mounts the volume rw. Removing the old WAL/SHM files
-    # first prevents stale write-ahead state corrupting the restore.
-    docker run --rm -i -v "${volume}:/data" alpine sh -c \
-      "apk add -q --no-cache sqlite >/dev/null 2>&1 && \
-       rm -f /data/${dbfile} /data/${dbfile}-wal /data/${dbfile}-shm && \
+    # Pipe SQL through stdin into sqlite3 in the sqlite-dumper container
+    # (rw mount). Removing the old WAL/SHM files first prevents stale
+    # write-ahead state corrupting the restore.
+    docker run --rm -i -v "${volume}:/data" sqlite-dumper:latest sh -c \
+      "rm -f /data/${dbfile} /data/${dbfile}-wal /data/${dbfile}-shm && \
        sqlite3 /data/${dbfile}" < "$sql_file" || \
       error "Restore failed for $name (continuing)"
   done
