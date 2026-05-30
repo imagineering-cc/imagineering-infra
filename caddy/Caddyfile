@@ -45,6 +45,12 @@ imagineering.cc {
     handle_path /api/contact {
         reverse_proxy localhost:3014
     }
+    @stage_guest {
+        path /stage /api/join /api/whoami /api/profile /api/search /api/queue /api/upvote /api/votes /api/visuals /api/gesture /api/events
+    }
+    handle @stage_guest {
+        reverse_proxy 100.71.8.40:3000
+    }
     handle {
         root * /srv/site
         file_server
@@ -162,6 +168,24 @@ world.imagineering.cc {
 
         reverse_proxy localhost:3015
     }
+
+    # --- Cache-busting layer 2 (per tech_world PR #476) ---
+    # The Flutter bundle (`main.dart.js`) is wrapped by `flutter_bootstrap.js`,
+    # which we stamp with a per-build `?v=<sha>` query string at deploy time.
+    # The query string forces browsers to re-fetch on every redeploy IF they
+    # actually request the new HTML. These headers ensure they do:
+    #   - `/` and `/index.html`: always revalidate, never serve a cached HTML
+    #     that points at a stale bootstrap.
+    #   - `/flutter_bootstrap.js`: never cached so the latest `?v=<sha>` query
+    #     in the HTML always lands on a fresh fetch.
+    # Hashed/static assets (`main.dart.js`, fonts, images) keep Caddy's
+    # default ETag-based behavior — they're large and rarely change between
+    # deploys for the same SHA.
+    @html_or_loader {
+        path / /index.html /flutter_bootstrap.js
+    }
+    header @html_or_loader Cache-Control "no-cache, must-revalidate"
+
     # Flutter web app — static files with SPA fallback
     handle {
         root * /srv/tech-world
