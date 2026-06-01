@@ -99,6 +99,52 @@ services:
     depends_on:
       - continuwuity
 
+  # --- aiko-bridge: Matrix <-> aiko_chat (Aiko Services / MQTT) -------------
+  # Source is the matrix/aiko-bridge submodule (github.com/nickmeinhold/aiko-bridge).
+  # Config + registration + db live server-side in ./aiko-bridge-data (gitignored),
+  # generated/registered once per the bridge README (like the other mautrix bridges).
+  aiko-mosquitto:
+    image: eclipse-mosquitto:2
+    restart: always
+    volumes:
+      - ./aiko-bridge/deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - aiko_mosquitto_data:/mosquitto/data
+
+  aiko-registrar:
+    build: ./aiko-bridge
+    image: aiko-bridge:latest
+    restart: always
+    environment:
+      AIKO_MQTT_HOST: aiko-mosquitto
+      AIKO_NAMESPACE: aiko
+    command: ["aiko_registrar"]
+    depends_on:
+      - aiko-mosquitto
+
+  aiko-chat:
+    image: aiko-bridge:latest
+    restart: always
+    environment:
+      AIKO_MQTT_HOST: aiko-mosquitto
+      AIKO_NAMESPACE: aiko
+    command: ["python", "-m", "aiko_chat.chat", "run"]
+    depends_on:
+      - aiko-registrar
+
+  aiko-bridge:
+    image: aiko-bridge:latest
+    restart: always
+    environment:
+      AIKO_MQTT_HOST: aiko-mosquitto
+      AIKO_NAMESPACE: aiko
+    command: ["python", "-m", "aiko_bridge", "-c", "/data/config.yaml"]
+    volumes:
+      - ./aiko-bridge-data:/data
+    depends_on:
+      - aiko-chat
+      - aiko-registrar
+      - continuwuity
+
 volumes:
   continuwuity_data:
   continuwuity_backups:
@@ -108,3 +154,4 @@ volumes:
   whatsapp_data:
   relay_data:
   relay_hf_data:
+  aiko_mosquitto_data:
