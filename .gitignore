@@ -16,3 +16,4 @@ oci/
 
 # Generated .env files (created from secrets.yaml during deploy)
 **/.env
+matrix/aiko-bridge-data/
