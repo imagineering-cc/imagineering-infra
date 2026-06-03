@@ -133,6 +133,21 @@ workspace:
 EOF
     cd downstream-server
     dart pub get
+    # Generate Drift code before running. build_runner emits the *.g.dart
+    # files the reconciler imports via the Drift schema; they are gitignored,
+    # so a fresh one-shot container has none and `dart run` aborts with a
+    # compile-time error (exit 254) — the original nightly failure since
+    # ~May 9 (imagineering #276/#360).
+    #
+    # NOTE: deliberately NO --delete-conflicting-outputs here, unlike the prod
+    # Dockerfile build stage. That image builds on dart:stable; this reconciler
+    # pins dart:3.11.5, whose newer build_runner has *removed* that flag
+    # (deleting conflicts is now the default). On 3.11.5 the removed flag makes
+    # build_runner exit non-zero AFTER writing outputs, and the inner `set -e`
+    # then aborts before the reconcile ever runs — re-creating exit 254 with a
+    # different root cause. Plain `build_runner build` exits 0. If you ever bump
+    # DART_IMAGE back to a stream where the flag is supported, you may re-add it.
+    dart run build_runner build
     exec dart run bin/reconcile_b2.dart '"$RECONCILE_ARGS"'
   '
 status=$?

@@ -74,4 +74,16 @@ send_telegram_alert() {
     echo "send_telegram_alert: curl failed (rc=$curl_rc): $curl_out" >&2
     return 0  # don't propagate — caller is in an alert path already
   fi
+  # curl exits 0 for an HTTP 4xx too (it got *a* response), so a Telegram API
+  # rejection — bot restricted/kicked, closed topic, bad thread id, HTML parse
+  # error — comes back as {"ok":false,...} with rc=0 and would otherwise pass
+  # silently. That is the exact silent-drop failure mode this alert path exists
+  # to avoid, so inspect the response body. (Plain glob, no jq dependency.)
+  case "$curl_out" in
+    *'"ok":true'*) : ;;  # delivered
+    *)
+      echo "send_telegram_alert: Telegram API rejected the message (rc=0): $curl_out" >&2
+      return 0  # still don't propagate — caller is already in an alert path
+      ;;
+  esac
 }
