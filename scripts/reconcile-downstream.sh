@@ -3,30 +3,41 @@
 #
 # Probes every `available` row in the live SQLite DB against B2/CDN reality
 # (DB → CDN 200 → moov-atom presence) and writes a structured report to a
-# log file. Report-only — never mutates DB or B2.
+# log file. Report-only by default — never mutates DB or B2.
 #
-# Runs the Dart script `bin/reconcile_b2.dart` from the rsynced server source
-# tree under a one-shot `dart:stable` container with a persistent pub-cache
-# volume so subsequent runs are fast. The DB is snapshotted via
-# `sqlite3 .backup` first because the live DB is held open in WAL mode by
+# Runs the `reconcile` binary that ships *inside* the downstream-server image
+# (/app/bin/reconcile, baked alongside /app/bin/server). The DB is snapshotted
+# via `sqlite3 .backup` first because the live DB is held open in WAL mode by
 # the running container — opening it directly fails with "database is locked".
 #
-# Exit codes (mirrors bin/reconcile_b2.dart):
+# Why the image binary, not a source checkout + runtime codegen: the previous
+# design rsynced the server source to ~/apps/downstream-server/source and ran
+# `dart pub get` + Drift `build_runner` + `dart run` every night. That rsync
+# (from the retired pre-GHCR deploy) silently froze at a non-compiling commit
+# and the cron exited 254 nightly for ~a month, blinding the only consistency
+# canary (imagineering #349/#360). Shipping the binary in the image means the
+# reconciler is always in lockstep with the running server's schema by
+# construction — no source tree to go stale, no SDK pin to drift, no codegen
+# in cron. The image referenced here is the same locally-present :latest the
+# host CD poll keeps current, so the reconciler matches the running server.
+#
+# Exit codes (mirror /app/bin/reconcile, i.e. bin/reconcile_b2.dart):
 #   0  no issues found (or only transient probe failures and not --strict)
 #   1  data-integrity issues found
-#   2  invalid arguments
+#   2  invalid arguments / missing B2 creds when --apply needs them
 #   3  transient probe failures with --strict set
-#   other  setup/snapshot failure (logged)
+#   other  setup/snapshot/container failure (logged)
 #
 # Manual run for ad-hoc verification:
 #   /opt/scripts/reconcile-downstream.sh
 # Tail the latest run:
 #   tail -f /home/nick/logs/reconcile-downstream.log
 #
-# RECONCILE_ARGS is forwarded into a `bash -c` and word-split by the inner
-# shell. Flags + integers + URLs without spaces are fine (the current usage).
-# Args containing spaces are not supported — pass them through a wrapper if
-# you ever need that.
+# RECONCILE_ARGS is word-split (unquoted) into the container command. Flags +
+# integers + URLs without spaces are fine (the current usage). Args containing
+# spaces are not supported. For `--apply` runs that need to mutate the B2
+# manifest, also pass B2 creds, e.g. via `RECONCILE_DOCKER_ARGS="--env-file
+# /home/nick/apps/downstream-server/.env"`.
 
 # `set -e` is deliberately omitted so the snapshot retry loop and the final
 # `docker run` can return non-zero without aborting the script before we
@@ -49,15 +60,11 @@ fi
 
 DB_LIVE="/home/nick/apps/downstream-server/data/downstream.db"
 DB_SNAPSHOT="/tmp/downstream-reconcile-$$.db"
-SOURCE_DIR="/home/nick/apps/downstream-server/source"
-PUB_CACHE_VOLUME="downstream-reconcile-pub-cache"
-# Pinned Dart SDK tag (was `dart:stable`). The reconciler script lives outside
-# the downstream monorepo, so `:stable` is a silent moving target — a future
-# major bump could break the run mid-night with no signal until the Telegram
-# alert fires. Pin to a known-good tag matching downstream's
-# `environment.sdk: ^3.5.0` constraint. Bump deliberately when the server's
-# own Dockerfile bumps.
-DART_IMAGE="dart:3.11.5"
+# The downstream-server image. Same tag the host CD poll keeps current, so the
+# baked /app/bin/reconcile matches the running server's schema. Referenced by
+# tag (not pulled here) so the reconciler uses the exact local image the
+# running container does; CD owns image freshness.
+IMAGE="ghcr.io/nickmeinhold/downstream-server:latest"
 
 # Telegram alert config — credentials and the send_telegram_alert helper
 # come from the shared lib, which sources /etc/downstream-secrets/telegram.env
@@ -67,8 +74,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/telegram.sh
 . "$SCRIPT_DIR/lib/telegram.sh"
 
-# Forwarded to the Dart script. Override at the cron call-site or env.
+# Forwarded to the reconcile binary (word-split). Override at the cron
+# call-site or env. Empty = report-only default.
 RECONCILE_ARGS="${RECONCILE_ARGS:-}"
+# Extra `docker run` args (word-split), e.g. an --env-file for --apply runs
+# that need B2 creds. Empty by default — report-only needs no creds.
+RECONCILE_DOCKER_ARGS="${RECONCILE_DOCKER_ARGS:-}"
 
 cleanup() {
   rm -f "$DB_SNAPSHOT"
@@ -102,63 +113,29 @@ if [ "$snapshot_ok" -ne 1 ]; then
   exit 11
 fi
 
-# Run reconcile in a one-shot dart container.
-#   - source mounted read-write at /src so `dart pub get` can write the
-#     synthetic workspace pubspec and .dart_tool/. The image is ephemeral.
-#   - snapshot mounted read-only at the path the script expects by default.
-#   - pub cache persisted across runs in a named volume so we don't re-fetch
-#     65 packages every night.
-#   - libsqlite3-dev installed at runtime (Drift's FFI loader needs the
-#     unversioned `libsqlite3.so` symlink, same constraint as the prod image).
+# Run the baked reconcile binary in a one-shot container.
+#   - snapshot mounted read-only at /data/downstream.db, the path the binary
+#     defaults to (the image sets ENV DB_PATH=/data/downstream.db).
+#   - the image has no ENTRYPOINT (CMD is /app/bin/server), so naming
+#     /app/bin/reconcile as the command overrides CMD to run the reconciler.
+#   - libsqlite3 for Drift's FFI loader is already in the image (same dep the
+#     server needs), so nothing to install at runtime.
+#   - report-only needs no env; --apply runs add creds via RECONCILE_DOCKER_ARGS.
+# shellcheck disable=SC2086  # intentional word-splitting of the *_ARGS vars
 docker run --rm \
-  -v "$SOURCE_DIR":/src \
   -v "$DB_SNAPSHOT":/data/downstream.db:ro \
-  -v "$PUB_CACHE_VOLUME":/root/.pub-cache \
-  -w /src \
-  "$DART_IMAGE" \
-  bash -c '
-    set -e
-    apt-get update -qq && apt-get install -y -qq libsqlite3-dev > /dev/null
-    # Generate the minimal workspace pubspec the Dockerfile uses so
-    # `dart pub get` resolves only the server + shared package, not the
-    # full monorepo workspace.
-    cat > pubspec.yaml <<EOF
-name: downstream_workspace
-publish_to: none
-environment:
-  sdk: ^3.5.0
-workspace:
-  - downstream-server
-  - packages/downstream_shared
-EOF
-    cd downstream-server
-    dart pub get
-    # Generate Drift code before running. build_runner emits the *.g.dart
-    # files the reconciler imports via the Drift schema; they are gitignored,
-    # so a fresh one-shot container has none and `dart run` aborts with a
-    # compile-time error (exit 254) — the original nightly failure since
-    # ~May 9 (imagineering #276/#360).
-    #
-    # NOTE: deliberately NO --delete-conflicting-outputs here, unlike the prod
-    # Dockerfile build stage. That image builds on dart:stable; this reconciler
-    # pins dart:3.11.5, whose newer build_runner has *removed* that flag
-    # (deleting conflicts is now the default). On 3.11.5 the removed flag makes
-    # build_runner exit non-zero AFTER writing outputs, and the inner `set -e`
-    # then aborts before the reconcile ever runs — re-creating exit 254 with a
-    # different root cause. Plain `build_runner build` exits 0. If you ever bump
-    # DART_IMAGE back to a stream where the flag is supported, you may re-add it.
-    dart run build_runner build
-    exec dart run bin/reconcile_b2.dart '"$RECONCILE_ARGS"'
-  '
+  $RECONCILE_DOCKER_ARGS \
+  "$IMAGE" \
+  /app/bin/reconcile $RECONCILE_ARGS
 status=$?
 
 echo "=== reconcile-downstream done (exit=$status) ==="
 
-# Alert on data-integrity issues (exit 1 from bin/reconcile_b2.dart). Other
-# non-zero exits (snapshot failure, transient probe failure with --strict,
-# bad args, container/setup error) also warrant a heads-up — silent failure
-# of the only catch-all consistency check is worse than a noisy ping. The
-# tail of the log file is included so the alert is actionable from a phone.
+# Alert on data-integrity issues (exit 1 from the reconciler). Other non-zero
+# exits (snapshot failure, transient probe failure with --strict, bad args,
+# container/setup error) also warrant a heads-up — silent failure of the only
+# catch-all consistency check is worse than a noisy ping. The tail of the log
+# file is included so the alert is actionable from a phone.
 if [ $status -ne 0 ]; then
   log_tail=""
   if [ -f /home/nick/logs/reconcile-downstream.log ]; then
