@@ -127,7 +127,9 @@ services:
     environment:
       AIKO_MQTT_HOST: aiko-mosquitto
       AIKO_NAMESPACE: aiko
-    command: ["python", "-m", "aiko_chat.chat", "run"]
+    # geekscape/aiko_chat bootstraps its HyperSpace (channels/users) before
+    # `aiko_chat run`; chat_start.sh does that idempotently from its working dir.
+    command: ["bash", "-c", "cd /tmp && exec bash /opt/aiko_chat/src/aiko_chat/chat_start.sh"]
     depends_on:
       - aiko-registrar
 
