@@ -1,0 +1,24 @@
+{
+  // CD Bus relay — fans out image.published events from CI to OCI-host
+  // subscribers over SSE. See cd-bus/README.md and the design doc:
+  // https://outline.imagineering.cc/doc/the-imagineering-deploy-bus-qz9QscpP6Q
+  "name": "cd-bus",
+  "main": "src/index.js",
+  "compatibility_date": "2025-05-01",
+  "observability": { "enabled": true },
+
+  // One Durable Object instance per service holds that service's open SSE
+  // connections and its last-published event (for replay on reconnect).
+  "durable_objects": {
+    "bindings": [
+      { "name": "BUS", "class_name": "ServiceChannel" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ServiceChannel"] }
+  ]
+
+  // PUBLISH_TOKEN is a secret, set out-of-band:
+  //   wrangler secret put PUBLISH_TOKEN
+  // For local `wrangler dev`, it is read from .dev.vars (gitignored).
+}

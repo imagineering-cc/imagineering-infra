@@ -1,0 +1,11 @@
+{
+  "name": "cd-bus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Imagineering deploy-bus relay: fans CI image.published events to OCI hosts over SSE",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "smoke": "./smoke-test.sh"
+  }
+}
