@@ -33,6 +33,14 @@ resource "namecheap_domain_records" "imagineering_cc" {
     address  = var.server_ip
   }
 
+  # gateway — specific override of the wildcard; points at Robin's OCI
+  # (robins-oci, ap-melbourne-1) which hosts the NFTmarket gateway stack.
+  record {
+    hostname = "gateway"
+    type     = "A"
+    address  = var.robin_oci_ip
+  }
+
   # SPF — authorize Brevo (Sendinblue) to send email for this domain
   record {
     hostname = "@"

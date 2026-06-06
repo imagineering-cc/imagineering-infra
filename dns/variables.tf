@@ -19,3 +19,9 @@ variable "server_ip" {
   type        = string
   default     = "149.118.69.221"
 }
+
+variable "robin_oci_ip" {
+  description = "Robin Langer's OCI instance (robins-oci, ap-melbourne-1) — hosts the gateway stack"
+  type        = string
+  default     = "207.211.145.30"
+}
