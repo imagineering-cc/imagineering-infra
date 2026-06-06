@@ -54,4 +54,25 @@ resource "namecheap_domain_records" "imagineering_cc" {
     type     = "TXT"
     address  = "v=DMARC1; p=none;"
   }
+
+  # Brevo domain verification — added manually in the dashboard; captured
+  # here so OVERWRITE mode doesn't delete it (would break email sending).
+  record {
+    hostname = "@"
+    type     = "TXT"
+    address  = "brevo-code:8ebdc1992c17dcab701f4b147022a6a3"
+  }
+
+  # Brevo DKIM — signing keys for outbound mail; preserve under OVERWRITE.
+  record {
+    hostname = "brevo1._domainkey"
+    type     = "CNAME"
+    address  = "b1.imagineering-cc.dkim.brevo.com."
+  }
+
+  record {
+    hostname = "brevo2._domainkey"
+    type     = "CNAME"
+    address  = "b2.imagineering-cc.dkim.brevo.com."
+  }
 }
