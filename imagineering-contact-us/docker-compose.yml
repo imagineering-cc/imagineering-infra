@@ -13,5 +13,7 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
       - CONTACT_TO=${CONTACT_TO}
+      # Cloudflare Turnstile secret; empty => verification off (feature flag).
+      - TURNSTILE_SECRET=${TURNSTILE_SECRET}
     ports:
       - "127.0.0.1:3014:8000"
