@@ -101,8 +101,13 @@ class RateLimiter:
             dq.append(now)
             self._global_hits.append(now)
 
-            # Opportunistic memory hygiene: drop IPs whose windows have aged out.
+            # Opportunistic memory hygiene: drop IPs whose windows have aged
+            # out. We must *prune each deque first* — a dormant IP's deque
+            # still holds its old timestamps, so `if not v` alone would never
+            # find it empty and the dict would grow unbounded (~global_max/day).
             if len(self._ip_hits) > 10_000:
+                for v in self._ip_hits.values():
+                    self._prune(v, now, self._per_ip_window)
                 stale = [k for k, v in self._ip_hits.items() if not v]
                 for k in stale:
                     del self._ip_hits[k]
@@ -127,10 +132,17 @@ def _send_email(msg, sender_email, sender_name):
 
 class ContactHandler(BaseHTTPRequestHandler):
     def _client_ip(self):
-        """Real client IP. Behind Caddy, trust the first X-Forwarded-For hop."""
+        """Real client IP for rate-limiting.
+
+        Caddy (our sole edge proxy, no `trusted_proxies` config) *appends* the
+        real peer IP to any client-supplied X-Forwarded-For. So the RIGHT-most
+        entry is the one Caddy stamped and the only one a client can't forge —
+        taking the left-most (`[0]`) would let a bot rotate a spoofed token to
+        evade the per-IP limit entirely.
+        """
         xff = self.headers.get("X-Forwarded-For", "")
         if xff:
-            return xff.split(",")[0].strip()
+            return xff.split(",")[-1].strip()
         return self.client_address[0]
 
     def _origin_ok(self):
@@ -169,8 +181,15 @@ class ContactHandler(BaseHTTPRequestHandler):
             self._respond(ok=False, status=403)
             return
 
-        body = self.rfile.read(length).decode("utf-8")
-        fields = parse_qs(body, max_num_fields=10)
+        # Malformed bodies (non-UTF-8, or >10 fields tripping parse_qs) get a
+        # clean 400 instead of an uncaught 500 in the logs.
+        try:
+            body = self.rfile.read(length).decode("utf-8")
+            fields = parse_qs(body, max_num_fields=10)
+        except (UnicodeDecodeError, ValueError):
+            print(f"[contact] reject malformed body from {ip}", file=sys.stderr)
+            self._respond(ok=False, status=400)
+            return
 
         # Honeypot — if filled, a bot submitted it. Pretend success, send nothing.
         if fields.get("_honey", [""])[0]:
@@ -249,7 +268,7 @@ if __name__ == "__main__":
     print(
         f"Contact form relay listening on :{port} "
         f"(rate {RATE_MAX}/{RATE_WINDOW}s per IP, "
-        f"global {GLOBAL_DAILY_MAX}/day, enforce_origin={ENFORCE_ORIGIN})",
+        f"global {GLOBAL_DAILY_MAX}/rolling-24h, enforce_origin={ENFORCE_ORIGIN})",
         file=sys.stderr,
     )
     server.serve_forever()
