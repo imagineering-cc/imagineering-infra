@@ -29,6 +29,13 @@ services:
       - PORT=3000
       - VOICE_MODE=${VOICE_MODE:-realtime}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Brain backend. maxplan routes the LLM stage through the claude-shim
+      # (Max-plan headless Claude Code, zero marginal cost) over the shared
+      # imagineering network; api falls back to the metered Anthropic API
+      # above. Defaults to maxplan — these are plain config, not secrets, so
+      # they live here in compose rather than the sops-encrypted secrets.yaml.
+      - DF_BRAIN=${DF_BRAIN:-maxplan}
+      - CLAUDE_SHIM_URL=${CLAUDE_SHIM_URL:-http://claude-shim:8088}
       - WHISPER_CLI=/opt/whisper/bin/whisper-cli
       - WHISPER_MODEL=/opt/whisper/models/ggml-base.en.bin
       - PIPER_BIN=/opt/piper/piper
