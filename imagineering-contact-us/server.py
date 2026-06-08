@@ -17,13 +17,16 @@ own domain), so the only place to stop it is here, before a send is issued.
 
 import os
 import sys
+import json
 import time
 import smtplib
 import threading
+import urllib.request
 from collections import deque
 from email.message import EmailMessage
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse, urlencode
 
 SMTP_HOST = os.environ["SMTP_HOST"]
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -57,6 +60,13 @@ ALLOWED_ORIGINS = tuple(
     for o in os.environ.get("ALLOWED_ORIGINS", _default_origins).split(",")
     if o.strip()
 )
+
+# Cloudflare Turnstile (defense-in-depth vs. smart bots that spoof Origin).
+# The secret's PRESENCE is the feature flag: empty => verification skipped, so the
+# frontend widget can ship first and we flip enforcement on by setting the secret.
+TURNSTILE_SECRET = os.environ.get("TURNSTILE_SECRET", "")
+TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+TURNSTILE_TIMEOUT = float(os.environ.get("TURNSTILE_TIMEOUT", "5"))
 
 
 class RateLimiter:
@@ -165,6 +175,34 @@ class ContactHandler(BaseHTTPRequestHandler):
         # Neither header present — not a real browser form submit.
         return False
 
+    def _verify_turnstile(self, token, remote_ip):
+        """Verify a Cloudflare Turnstile token server-side.
+
+        Returns True if the request should be allowed through.
+
+        Fail policy is deliberately asymmetric:
+          * missing token, or siteverify says success=false  -> False (fail CLOSED)
+          * siteverify unreachable / times out / non-JSON      -> True  (fail OPEN)
+        A Cloudflare outage must not take the contact form down, and the per-IP
+        rate limit + global cap still backstop the Brevo quota during such a
+        window. Only an explicit "this token is bad" verdict blocks the send.
+        """
+        if not token:
+            return False
+        data = urlencode(
+            {"secret": TURNSTILE_SECRET, "response": token, "remoteip": remote_ip}
+        ).encode()
+        try:
+            req = urllib.request.Request(TURNSTILE_VERIFY_URL, data=data)
+            with urllib.request.urlopen(req, timeout=TURNSTILE_TIMEOUT) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            return bool(result.get("success"))
+        except (URLError, OSError, ValueError) as exc:
+            # Network/parse failure — fail open, but make it loud.
+            print(f"[contact] turnstile verify error (failing open): {exc}",
+                  file=sys.stderr)
+            return True
+
     def do_POST(self):
         ip = self._client_ip()
 
@@ -211,6 +249,16 @@ class ContactHandler(BaseHTTPRequestHandler):
             print(f"[contact] rate-limited ({reason}) from {ip}", file=sys.stderr)
             self._respond(ok=False, status=429)
             return
+
+        # Turnstile — the human-proof gate, last (after the cheap in-memory checks
+        # so the rate limit caps how many siteverify network calls any IP can
+        # trigger). Skipped entirely when TURNSTILE_SECRET is unset.
+        if TURNSTILE_SECRET:
+            token = fields.get("cf-turnstile-response", [""])[0]
+            if not self._verify_turnstile(token, ip):
+                print(f"[contact] reject turnstile from {ip}", file=sys.stderr)
+                self._respond(ok=False, status=403)
+                return
 
         msg = EmailMessage()
         msg["From"] = SMTP_FROM
@@ -268,7 +316,8 @@ if __name__ == "__main__":
     print(
         f"Contact form relay listening on :{port} "
         f"(rate {RATE_MAX}/{RATE_WINDOW}s per IP, "
-        f"global {GLOBAL_DAILY_MAX}/rolling-24h, enforce_origin={ENFORCE_ORIGIN})",
+        f"global {GLOBAL_DAILY_MAX}/rolling-24h, enforce_origin={ENFORCE_ORIGIN}, "
+        f"turnstile={'on' if TURNSTILE_SECRET else 'off'})",
         file=sys.stderr,
     )
     server.serve_forever()

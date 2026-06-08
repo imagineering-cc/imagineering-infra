@@ -170,15 +170,23 @@ deploy_contact() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once into a variable so we
+    # can run two yq passes without re-decrypting (and without echoing plaintext).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$CONTACT_SECRETS" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
+    local CONTACT_PLAINTEXT
+    CONTACT_PLAINTEXT=$(sops -d "$CONTACT_SECRETS")
+    echo "$CONTACT_PLAINTEXT" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
 SMTP_HOST=\(.smtp_host)
 SMTP_PORT=\(.smtp_port)
 SMTP_USERNAME=\(.smtp_username)
 SMTP_PASSWORD=\(.smtp_password)
 SMTP_FROM_EMAIL=\(.smtp_from_email)
 CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/imagineering-contact-us/.env"
+    # Turnstile secret appended in a separate pass: yq string-interpolation can't
+    # embed the `// ""` empty-string default (the nested quotes break parsing),
+    # so coalesce here. Empty when the key is absent => verification stays off.
+    echo "TURNSTILE_SECRET=$(echo "$CONTACT_PLAINTEXT" | yq -r '.turnstile_secret // ""')" \
+        >> "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/imagineering-contact-us"
@@ -200,7 +208,13 @@ deploy_service() {
     echo "Deploying $svc..."
     ssh "$REMOTE" "mkdir -p ~/apps/$svc"
     rsync -avz --delete "$REPO_ROOT/$svc/" "$REMOTE":~/apps/"$svc"/
-    ssh "$REMOTE" "cd ~/apps/$svc && docker compose pull && docker compose up -d"
+    if [ "$svc" = "caddy" ]; then
+        # Caddyfile is bind-mounted as one file; rsync replaces its inode.
+        # Recreate the container so its mount follows the newly deployed file.
+        ssh "$REMOTE" "cd ~/apps/$svc && docker compose pull && docker compose up -d --force-recreate"
+    else
+        ssh "$REMOTE" "cd ~/apps/$svc && docker compose pull && docker compose up -d"
+    fi
 }
 
 deploy_notify() {
