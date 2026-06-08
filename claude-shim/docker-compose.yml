@@ -1,0 +1,27 @@
+# claude-shim — shared Max-plan inference endpoint for OCI container callers.
+#
+# Deploy: ./scripts/deploy-to.sh 149.118.69.221 claude-shim
+#   (claude-shim builds from ./Dockerfile rather than pulling a published
+#    image, so it needs a `docker compose build` deploy case — see README.)
+#
+# Consumers (embodied-dreamfinder, the healer) reach it over the shared
+# `imagineering` network by service name: http://claude-shim:8088/chat — the
+# same network DF uses to reach the text brain (dreamfinder:8081). The
+# host-published port is for curl-from-host smoke tests only.
+
+services:
+  claude-shim:
+    build:
+      context: .
+    container_name: claude-shim
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8088:8088"   # host-local smoke tests; container callers use the network name
+    networks:
+      - imagineering
+
+# External: created out-of-band, shared with embodied-dreamfinder + the bots.
+networks:
+  imagineering:
+    external: true
