@@ -1,7 +1,10 @@
 services:
   imagineering-contact-us:
     build: .
-    container_name: imagineering-contact-us
+    # Container keeps the img-* fleet convention (matches the CLAUDE.md service
+    # table and Caddy notes) even though the compose service / dir is the
+    # canonical imagineering-contact-us.
+    container_name: img-contact
     restart: unless-stopped
     environment:
       - SMTP_HOST=${SMTP_HOST}
