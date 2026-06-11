@@ -22,6 +22,49 @@ REMOTE="nick@$IP"
 
 echo "Deploying to $REMOTE..."
 
+# --- dotenv generation helpers ----------------------------------------------
+# The generated .env files are parsed by docker compose's dotenv parser
+# (compose-go/dotenv). Bare-interpolated values break if a secret ever
+# contains dotenv-significant bytes: `$VAR` expands, ` #` starts a comment,
+# quotes/whitespace change tokenization, newlines split the line. Defense in
+# depth: render EVERY value double-quoted with the escapes compose-go
+# supports inside double quotes (\\ \" \$ \n \r — see
+# https://github.com/compose-spec/compose-go/blob/main/dotenv/parser.go).
+
+# dotenv_quote VALUE — print VALUE as a dotenv-safe double-quoted token.
+dotenv_quote() {
+    local v=$1
+    v=${v//\\/\\\\}      # backslash first, so it doesn't re-escape the rest
+    v=${v//\"/\\\"}      # closing-quote injection
+    v=${v//\$/\\\$}      # $VAR would expand inside double quotes
+    v=${v//$'\n'/\\n}    # newline would end the line mid-value
+    v=${v//$'\r'/\\r}
+    printf '"%s"' "$v"
+}
+
+# env_kv KEY YQ_EXPR — read SOPS-decrypted YAML on stdin, evaluate YQ_EXPR,
+# and print one dotenv-safe `KEY="value"` line. Mirrors the old yq
+# string-interpolation templates (missing keys still render as "null")
+# without echoing plaintext anywhere but the target .env.
+env_kv() {
+    local key=$1 expr=$2 val
+    val=$(yq -r "$expr")
+    printf '%s=' "$key"
+    dotenv_quote "$val"
+    printf '\n'
+}
+
+# gen_env KEY=YQ_EXPR [KEY=YQ_EXPR ...] — read SOPS-decrypted YAML on stdin
+# and emit one dotenv-quoted line per KEY. Everything after the first `=` is
+# the yq expression evaluated against the YAML (e.g. SMTP_HOST=.smtp_host).
+gen_env() {
+    local yaml pair
+    yaml=$(cat)
+    for pair in "$@"; do
+        env_kv "${pair%%=*}" "${pair#*=}" <<<"$yaml"
+    done
+}
+
 deploy_scripts() {
     echo "Deploying scripts..."
     ssh "$REMOTE" "sudo mkdir -p /opt/scripts /opt/scripts/lib"
@@ -144,22 +187,23 @@ deploy_contact() {
     fi
 
     # Generate .env from encrypted secrets. Decrypt once into a variable so we
-    # can run two yq passes without re-decrypting (and without echoing plaintext).
+    # can run multiple yq passes without re-decrypting (and without echoing
+    # plaintext). All values rendered dotenv-quoted via gen_env.
     echo "Generating .env from encrypted secrets..."
     local CONTACT_PLAINTEXT
     CONTACT_PLAINTEXT=$(sops -d "$CONTACT_SECRETS")
-    echo "$CONTACT_PLAINTEXT" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/imagineering-contact-us/.env"
-    # Turnstile secret appended in a separate pass: yq string-interpolation can't
-    # embed the `// ""` empty-string default (the nested quotes break parsing),
-    # so coalesce here. Empty when the key is absent => verification stays off.
-    echo "TURNSTILE_SECRET=$(echo "$CONTACT_PLAINTEXT" | yq -r '.turnstile_secret // ""')" \
-        >> "$REPO_ROOT/imagineering-contact-us/.env"
+    # TURNSTILE_SECRET: empty when the key is absent => verification stays off.
+    {
+        echo "# Contact Form Configuration (auto-generated from secrets.yaml)"
+        gen_env \
+            SMTP_HOST=.smtp_host \
+            SMTP_PORT=.smtp_port \
+            SMTP_USERNAME=.smtp_username \
+            SMTP_PASSWORD=.smtp_password \
+            SMTP_FROM_EMAIL=.smtp_from_email \
+            CONTACT_TO=.contact_to \
+            'TURNSTILE_SECRET=.turnstile_secret // ""' <<<"$CONTACT_PLAINTEXT"
+    } > "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/imagineering-contact-us"
@@ -201,9 +245,10 @@ deploy_notify() {
     fi
 
     echo "Generating .env from encrypted secrets..."
-    sops -d "$NOTIFY_SECRETS" | yq -r '"TELEGRAM_BOT_TOKEN=\(.telegram_bot_token)
-TELEGRAM_CHAT_ID=\(.telegram_chat_id)
-NOTIFY_API_KEY=\(.notify_api_key)"' > "$REPO_ROOT/notify/.env"
+    sops -d "$NOTIFY_SECRETS" | gen_env \
+        TELEGRAM_BOT_TOKEN=.telegram_bot_token \
+        TELEGRAM_CHAT_ID=.telegram_chat_id \
+        NOTIFY_API_KEY=.notify_api_key > "$REPO_ROOT/notify/.env"
 
     ssh "$REMOTE" "mkdir -p ~/apps/notify"
     rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/notify/" "$REMOTE":~/apps/notify/
@@ -238,10 +283,13 @@ deploy_familiars_server() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$FAM_SECRETS" | yq -r '"# familiars-server Configuration (auto-generated from secrets.yaml)
-FIREBASE_PROJECT_ID=\(.firebase_project_id)
-FIREBASE_SERVICE_ACCOUNT_BASE64=\(.firebase_service_account_base64)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)"' > "$REPO_ROOT/familiars-server/.env"
+    {
+        echo "# familiars-server Configuration (auto-generated from secrets.yaml)"
+        sops -d "$FAM_SECRETS" | gen_env \
+            FIREBASE_PROJECT_ID=.firebase_project_id \
+            FIREBASE_SERVICE_ACCOUNT_BASE64=.firebase_service_account_base64 \
+            CLAUDE_CODE_OAUTH_TOKEN=.claude_code_oauth_token
+    } > "$REPO_ROOT/familiars-server/.env"
 
     # Deploy compose + .env
     ssh "$REMOTE" "mkdir -p ~/apps/familiars-server/source ~/apps/familiars-server/data"
@@ -403,28 +451,23 @@ deploy_outline() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$OUTLINE_SECRETS" | yq -r '"# Outline Configuration (auto-generated from secrets.yaml)
-OUTLINE_URL=\(.outline_url)
-
-# Generated secrets
-SECRET_KEY=\(.secret_key)
-UTILS_SECRET=\(.utils_secret)
-
-# Postgres
-POSTGRES_PASSWORD=\(.postgres_password)
-
-# MinIO (S3-compatible storage)
-MINIO_ROOT_USER=\(.minio_root_user)
-MINIO_ROOT_PASSWORD=\(.minio_root_password)
-MINIO_URL=\(.minio_url)
-
-# SMTP
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-SMTP_SECURE=\(.smtp_secure)"' > "$REPO_ROOT/outline/.env"
+    {
+        echo "# Outline Configuration (auto-generated from secrets.yaml)"
+        sops -d "$OUTLINE_SECRETS" | gen_env \
+            OUTLINE_URL=.outline_url \
+            SECRET_KEY=.secret_key \
+            UTILS_SECRET=.utils_secret \
+            POSTGRES_PASSWORD=.postgres_password \
+            MINIO_ROOT_USER=.minio_root_user \
+            MINIO_ROOT_PASSWORD=.minio_root_password \
+            MINIO_URL=.minio_url \
+            SMTP_HOST=.smtp_host \
+            SMTP_PORT=.smtp_port \
+            SMTP_USERNAME=.smtp_username \
+            SMTP_PASSWORD=.smtp_password \
+            SMTP_FROM_EMAIL=.smtp_from_email \
+            SMTP_SECURE=.smtp_secure
+    } > "$REPO_ROOT/outline/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/outline"
@@ -455,23 +498,26 @@ deploy_kanbn() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$KANBN_SECRETS" | yq -r '"# Kan.bn Configuration (auto-generated from secrets.yaml)
-KANBN_URL=\(.kanbn_url)
-AUTH_SECRET=\(.auth_secret)
-POSTGRES_PASSWORD=\(.postgres_password)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-TRELLO_API_KEY=\(.trello_api_key)
-TRELLO_API_SECRET=\(.trello_api_secret)
-S3_ENDPOINT=\(.s3_endpoint)
-S3_ACCESS_KEY_ID=\(.s3_access_key_id)
-S3_SECRET_ACCESS_KEY=\(.s3_secret_access_key)
-NEXT_PUBLIC_STORAGE_URL=\(.next_public_storage_url)
-WEBHOOK_URL=\(.webhook_url)
-WEBHOOK_SECRET=\(.webhook_secret)"' > "$REPO_ROOT/kanbn/.env"
+    {
+        echo "# Kan.bn Configuration (auto-generated from secrets.yaml)"
+        sops -d "$KANBN_SECRETS" | gen_env \
+            KANBN_URL=.kanbn_url \
+            AUTH_SECRET=.auth_secret \
+            POSTGRES_PASSWORD=.postgres_password \
+            SMTP_HOST=.smtp_host \
+            SMTP_PORT=.smtp_port \
+            SMTP_USERNAME=.smtp_username \
+            SMTP_PASSWORD=.smtp_password \
+            SMTP_FROM_EMAIL=.smtp_from_email \
+            TRELLO_API_KEY=.trello_api_key \
+            TRELLO_API_SECRET=.trello_api_secret \
+            S3_ENDPOINT=.s3_endpoint \
+            S3_ACCESS_KEY_ID=.s3_access_key_id \
+            S3_SECRET_ACCESS_KEY=.s3_secret_access_key \
+            NEXT_PUBLIC_STORAGE_URL=.next_public_storage_url \
+            WEBHOOK_URL=.webhook_url \
+            WEBHOOK_SECRET=.webhook_secret
+    } > "$REPO_ROOT/kanbn/.env"
 
     # Deploy .env and compose files
     ssh "$REMOTE" "mkdir -p ~/apps/kanbn"
@@ -509,29 +555,32 @@ deploy_pm_bot() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$PM_BOT_SECRETS" | yq -r '"# Dreamfinder Configuration (auto-generated from secrets.yaml)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-MATRIX_HOMESERVER=\(.matrix_homeserver)
-MATRIX_ACCESS_TOKEN=\(.matrix_access_token)
-KAN_BASE_URL=\(.kan_base_url)
-KAN_API_KEY=\(.kan_api_key)
-OUTLINE_BASE_URL=\(.outline_base_url)
-OUTLINE_API_KEY=\(.outline_api_key)
-RADICALE_BASE_URL=\(.radicale_base_url)
-RADICALE_USERNAME=\(.radicale_username)
-RADICALE_PASSWORD=\(.radicale_password)
-PLAYWRIGHT_ENABLED=\(.playwright_enabled)
-BOT_NAME=\(.bot_name)
-LOG_LEVEL=\(.log_level)
-API_KEY=\(.api_key)
-LIVEKIT_URL=\(.livekit_url)
-LIVEKIT_API_KEY=\(.livekit_api_key)
-LIVEKIT_API_SECRET=\(.livekit_api_secret)
-ADMIN_IDS=\(.admin_ids)
-MATRIX_ALWAYS_RESPOND_ROOMS=\(.matrix_always_respond_rooms)
-CALENDAR_URL=\(.calendar_url)
-EVENT_TIMEZONE=\(.event_timezone)
-DEPLOY_ANNOUNCE_GROUP_ID=\(.deploy_announce_group_id)"' > "$REPO_ROOT/dreamfinder/.env"
+    {
+        echo "# Dreamfinder Configuration (auto-generated from secrets.yaml)"
+        sops -d "$PM_BOT_SECRETS" | gen_env \
+            ANTHROPIC_API_KEY=.anthropic_api_key \
+            MATRIX_HOMESERVER=.matrix_homeserver \
+            MATRIX_ACCESS_TOKEN=.matrix_access_token \
+            KAN_BASE_URL=.kan_base_url \
+            KAN_API_KEY=.kan_api_key \
+            OUTLINE_BASE_URL=.outline_base_url \
+            OUTLINE_API_KEY=.outline_api_key \
+            RADICALE_BASE_URL=.radicale_base_url \
+            RADICALE_USERNAME=.radicale_username \
+            RADICALE_PASSWORD=.radicale_password \
+            PLAYWRIGHT_ENABLED=.playwright_enabled \
+            BOT_NAME=.bot_name \
+            LOG_LEVEL=.log_level \
+            API_KEY=.api_key \
+            LIVEKIT_URL=.livekit_url \
+            LIVEKIT_API_KEY=.livekit_api_key \
+            LIVEKIT_API_SECRET=.livekit_api_secret \
+            ADMIN_IDS=.admin_ids \
+            MATRIX_ALWAYS_RESPOND_ROOMS=.matrix_always_respond_rooms \
+            CALENDAR_URL=.calendar_url \
+            EVENT_TIMEZONE=.event_timezone \
+            DEPLOY_ANNOUNCE_GROUP_ID=.deploy_announce_group_id
+    } > "$REPO_ROOT/dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder/src"
@@ -577,28 +626,29 @@ deploy_embodied_dreamfinder() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. The `// "default"` coalescing that
+    # used to need backslash-escaped quotes inside a yq interpolation template
+    # (yq v4.50.1+ lexer incident, 2026-05-09) is now a plain yq expression —
+    # gen_env evaluates each expression directly, no string template involved.
     echo "Generating .env from encrypted secrets..."
-    # NOTE: inner double-quotes inside the yq template MUST be backslash-escaped
-    # (`\"…\"`) — yq v4.50.1+ rejects unescaped inner quotes with
-    # `lexer: invalid input text`. See incident 2026-05-09 during
-    # DREAMFINDER_API_KEY rotation. Other deploy_* templates above don't
-    # have `// "default"` literals so they happen to work.
-    sops -d "$EDF_SECRETS" | yq -r '"# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)
-AUTH_PASSWORD=\(.auth_password // \"\")
-AUTH_SECRET=\(.auth_secret // \"\")
-OPENAI_API_KEY=\(.openai_api_key // \"\")
-ANTHROPIC_API_KEY=\(.anthropic_api_key // \"\")
-VOICE_MODE=\(.voice_mode // \"realtime\")
-OUTLINE_API_KEY=\(.outline_api_key // \"\")
-RADICALE_CALENDAR_URL=\(.radicale_calendar_url // \"\")
-RADICALE_USERNAME=\(.radicale_username // \"\")
-RADICALE_PASSWORD=\(.radicale_password // \"\")
-DREAMFINDER_API_URL=\(.dreamfinder_api_url // \"\")
-DREAMFINDER_API_KEY=\(.dreamfinder_api_key // \"\")
-LIVEKIT_URL=\(.livekit_url // \"\")
-LIVEKIT_API_KEY=\(.livekit_api_key // \"\")
-LIVEKIT_API_SECRET=\(.livekit_api_secret // \"\")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+    {
+        echo "# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)"
+        sops -d "$EDF_SECRETS" | gen_env \
+            'AUTH_PASSWORD=.auth_password // ""' \
+            'AUTH_SECRET=.auth_secret // ""' \
+            'OPENAI_API_KEY=.openai_api_key // ""' \
+            'ANTHROPIC_API_KEY=.anthropic_api_key // ""' \
+            'VOICE_MODE=.voice_mode // "realtime"' \
+            'OUTLINE_API_KEY=.outline_api_key // ""' \
+            'RADICALE_CALENDAR_URL=.radicale_calendar_url // ""' \
+            'RADICALE_USERNAME=.radicale_username // ""' \
+            'RADICALE_PASSWORD=.radicale_password // ""' \
+            'DREAMFINDER_API_URL=.dreamfinder_api_url // ""' \
+            'DREAMFINDER_API_KEY=.dreamfinder_api_key // ""' \
+            'LIVEKIT_URL=.livekit_url // ""' \
+            'LIVEKIT_API_KEY=.livekit_api_key // ""' \
+            'LIVEKIT_API_SECRET=.livekit_api_secret // ""'
+    } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
@@ -694,16 +744,17 @@ deploy_tech_world_bots() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$TWB_SECRETS" | yq -r '"LIVEKIT_URL=\(.livekit_url)
-LIVEKIT_API_KEY=\(.livekit_api_key)
-LIVEKIT_API_SECRET=\(.livekit_api_secret)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-OPENAI_API_KEY=\(.openai_api_key)
-KAN_BASE_URL=\(.kan_base_url)
-KAN_API_KEY=\(.kan_api_key)
-KAN_BOARD_ID=\(.kan_board_id)
-OUTLINE_BASE_URL=\(.outline_base_url)
-OUTLINE_API_KEY=\(.outline_api_key)"' > "$REPO_ROOT/tech-world-bots/.env"
+    sops -d "$TWB_SECRETS" | gen_env \
+        LIVEKIT_URL=.livekit_url \
+        LIVEKIT_API_KEY=.livekit_api_key \
+        LIVEKIT_API_SECRET=.livekit_api_secret \
+        ANTHROPIC_API_KEY=.anthropic_api_key \
+        OPENAI_API_KEY=.openai_api_key \
+        KAN_BASE_URL=.kan_base_url \
+        KAN_API_KEY=.kan_api_key \
+        KAN_BOARD_ID=.kan_board_id \
+        OUTLINE_BASE_URL=.outline_base_url \
+        OUTLINE_API_KEY=.outline_api_key > "$REPO_ROOT/tech-world-bots/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/tech-world-bots/src"
@@ -774,19 +825,22 @@ deploy_matrix() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$MATRIX_SECRETS" | yq -r '"# Matrix Configuration (auto-generated from secrets.yaml)
-MATRIX_SERVER_NAME=\(.matrix_server_name)
-REGISTRATION_TOKEN=\(.registration_token)
-RELAY_AS_TOKEN=\(.relay_as_token)
-RELAY_HS_TOKEN=\(.relay_hs_token)
-PORTAL_ROOMS=\(.portal_rooms)
-HUB_ROOM_ID=\(.hub_room_id)
-RELAY_DOUBLE_PUPPETS=\(.relay_double_puppets)
-RELAY_LOG_LEVEL=\(.relay_log_level)
-HF_RELAY_AS_TOKEN=\(.hf_relay_as_token)
-HF_RELAY_HS_TOKEN=\(.hf_relay_hs_token)
-HF_PORTAL_ROOMS=\(.hf_portal_rooms)
-HF_HUB_ROOM_ID=\(.hf_hub_room_id)"' > "$REPO_ROOT/matrix/.env"
+    {
+        echo "# Matrix Configuration (auto-generated from secrets.yaml)"
+        sops -d "$MATRIX_SECRETS" | gen_env \
+            MATRIX_SERVER_NAME=.matrix_server_name \
+            REGISTRATION_TOKEN=.registration_token \
+            RELAY_AS_TOKEN=.relay_as_token \
+            RELAY_HS_TOKEN=.relay_hs_token \
+            PORTAL_ROOMS=.portal_rooms \
+            HUB_ROOM_ID=.hub_room_id \
+            RELAY_DOUBLE_PUPPETS=.relay_double_puppets \
+            RELAY_LOG_LEVEL=.relay_log_level \
+            HF_RELAY_AS_TOKEN=.hf_relay_as_token \
+            HF_RELAY_HS_TOKEN=.hf_relay_hs_token \
+            HF_PORTAL_ROOMS=.hf_portal_rooms \
+            HF_HUB_ROOM_ID=.hf_hub_room_id
+    } > "$REPO_ROOT/matrix/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/matrix"
@@ -834,9 +888,12 @@ deploy_youtube_rag() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$RAG_SECRETS" | yq -r '"# YouTube RAG Configuration (auto-generated from secrets.yaml)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-YOUTUBE_API_KEY=\(.youtube_api_key)"' > "$REPO_ROOT/youtube-rag/.env"
+    {
+        echo "# YouTube RAG Configuration (auto-generated from secrets.yaml)"
+        sops -d "$RAG_SECRETS" | gen_env \
+            ANTHROPIC_API_KEY=.anthropic_api_key \
+            YOUTUBE_API_KEY=.youtube_api_key
+    } > "$REPO_ROOT/youtube-rag/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/youtube-rag/src"
@@ -897,40 +954,43 @@ deploy_claudius() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$CLAUDIUS_SECRETS" | yq -r '"# Claudius Configuration (auto-generated from secrets.yaml)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
-CLAUDE_CREDENTIALS_JSON=\(.claude_credentials_json)
-GH_TOKEN=\(.gh_token)
-AGENT_NAME=\(.agent_name)
-MY_EMAIL=\(.my_email)
-PEER_EMAIL=\(.peer_email)
-OWNER_EMAIL=\(.owner_email)
-CC_EMAIL=\(.cc_email)
-IMAP_HOST=\(.imap_host)
-IMAP_PORT=\(.imap_port)
-IMAP_USER=\(.imap_user)
-IMAP_PASS=\(.imap_pass)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-GIT_USER_NAME=\(.git_user_name)
-GIT_USER_EMAIL=\(.git_user_email)
-JOURNAL_REPO=\(.journal_repo)
-ARCHIVE_REPO=\(.archive_repo)
-ALLOWED_SENDERS=\(.allowed_senders)
-SEND_FIRST=\(.send_first)
-POLL_INTERVAL=\(.poll_interval)
-MODEL=\(.model)
-MAX_TURNS=\(.max_turns)
-WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
-QUOTA_RESET_DAY=\(.quota_reset_day)
-QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
-MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
-REPORT_EVERY_N=\(.report_every_n)
-EVOLUTION_PROBABILITY=\(.evolution_probability)
-EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
-INITIATIVE_PROBABILITY=\(.initiative_probability)
-INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
-INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/claudius/.env"
+    {
+        echo "# Claudius Configuration (auto-generated from secrets.yaml)"
+        sops -d "$CLAUDIUS_SECRETS" | gen_env \
+            CLAUDE_CODE_OAUTH_TOKEN=.claude_code_oauth_token \
+            CLAUDE_CREDENTIALS_JSON=.claude_credentials_json \
+            GH_TOKEN=.gh_token \
+            AGENT_NAME=.agent_name \
+            MY_EMAIL=.my_email \
+            PEER_EMAIL=.peer_email \
+            OWNER_EMAIL=.owner_email \
+            CC_EMAIL=.cc_email \
+            IMAP_HOST=.imap_host \
+            IMAP_PORT=.imap_port \
+            IMAP_USER=.imap_user \
+            IMAP_PASS=.imap_pass \
+            SMTP_HOST=.smtp_host \
+            SMTP_PORT=.smtp_port \
+            GIT_USER_NAME=.git_user_name \
+            GIT_USER_EMAIL=.git_user_email \
+            JOURNAL_REPO=.journal_repo \
+            ARCHIVE_REPO=.archive_repo \
+            ALLOWED_SENDERS=.allowed_senders \
+            SEND_FIRST=.send_first \
+            POLL_INTERVAL=.poll_interval \
+            MODEL=.model \
+            MAX_TURNS=.max_turns \
+            WEEKLY_TURN_QUOTA=.weekly_turn_quota \
+            QUOTA_RESET_DAY=.quota_reset_day \
+            QUOTA_RESET_HOUR_UTC=.quota_reset_hour_utc \
+            MAX_RETRIES_PER_MESSAGE=.max_retries_per_message \
+            REPORT_EVERY_N=.report_every_n \
+            EVOLUTION_PROBABILITY=.evolution_probability \
+            EVOLUTION_MAX_TURNS=.evolution_max_turns \
+            INITIATIVE_PROBABILITY=.initiative_probability \
+            INITIATIVE_MAX_TURNS=.initiative_max_turns \
+            INITIATIVE_COOLDOWN_HOURS=.initiative_cooldown_hours
+    } > "$REPO_ROOT/claudius/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/claudius/src"
@@ -983,39 +1043,42 @@ deploy_lugh() {
 
     # Generate .env from encrypted secrets
     echo "Generating .env from encrypted secrets..."
-    sops -d "$LUGH_SECRETS" | yq -r '"# Lugh Configuration (auto-generated from secrets.yaml)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
-GH_TOKEN=\(.gh_token)
-AGENT_NAME=\(.agent_name)
-MY_EMAIL=\(.my_email)
-PEER_EMAIL=\(.peer_email)
-OWNER_EMAIL=\(.owner_email)
-CC_EMAIL=\(.cc_email)
-IMAP_HOST=\(.imap_host)
-IMAP_PORT=\(.imap_port)
-IMAP_USER=\(.imap_user)
-IMAP_PASS=\(.imap_pass)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-GIT_USER_NAME=\(.git_user_name)
-GIT_USER_EMAIL=\(.git_user_email)
-JOURNAL_REPO=\(.journal_repo)
-ARCHIVE_REPO=\(.archive_repo)
-ALLOWED_SENDERS=\(.allowed_senders)
-SEND_FIRST=\(.send_first)
-POLL_INTERVAL=\(.poll_interval)
-MODEL=\(.model)
-MAX_TURNS=\(.max_turns)
-WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
-QUOTA_RESET_DAY=\(.quota_reset_day)
-QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
-MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
-REPORT_EVERY_N=\(.report_every_n)
-EVOLUTION_PROBABILITY=\(.evolution_probability)
-EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
-INITIATIVE_PROBABILITY=\(.initiative_probability)
-INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
-INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/lugh/.env"
+    {
+        echo "# Lugh Configuration (auto-generated from secrets.yaml)"
+        sops -d "$LUGH_SECRETS" | gen_env \
+            CLAUDE_CODE_OAUTH_TOKEN=.claude_code_oauth_token \
+            GH_TOKEN=.gh_token \
+            AGENT_NAME=.agent_name \
+            MY_EMAIL=.my_email \
+            PEER_EMAIL=.peer_email \
+            OWNER_EMAIL=.owner_email \
+            CC_EMAIL=.cc_email \
+            IMAP_HOST=.imap_host \
+            IMAP_PORT=.imap_port \
+            IMAP_USER=.imap_user \
+            IMAP_PASS=.imap_pass \
+            SMTP_HOST=.smtp_host \
+            SMTP_PORT=.smtp_port \
+            GIT_USER_NAME=.git_user_name \
+            GIT_USER_EMAIL=.git_user_email \
+            JOURNAL_REPO=.journal_repo \
+            ARCHIVE_REPO=.archive_repo \
+            ALLOWED_SENDERS=.allowed_senders \
+            SEND_FIRST=.send_first \
+            POLL_INTERVAL=.poll_interval \
+            MODEL=.model \
+            MAX_TURNS=.max_turns \
+            WEEKLY_TURN_QUOTA=.weekly_turn_quota \
+            QUOTA_RESET_DAY=.quota_reset_day \
+            QUOTA_RESET_HOUR_UTC=.quota_reset_hour_utc \
+            MAX_RETRIES_PER_MESSAGE=.max_retries_per_message \
+            REPORT_EVERY_N=.report_every_n \
+            EVOLUTION_PROBABILITY=.evolution_probability \
+            EVOLUTION_MAX_TURNS=.evolution_max_turns \
+            INITIATIVE_PROBABILITY=.initiative_probability \
+            INITIATIVE_MAX_TURNS=.initiative_max_turns \
+            INITIATIVE_COOLDOWN_HOURS=.initiative_cooldown_hours
+    } > "$REPO_ROOT/lugh/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/lugh/src"
