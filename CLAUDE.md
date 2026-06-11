@@ -69,7 +69,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 |---------|------|-----|-------------|
 | notify | 8090 | notify.imagineering.cc | Telegram-send proxy for any service/script. POST `{message, parse_mode?}` with `Authorization: Bearer $NOTIFY_API_KEY`. See `project_notify_service.md`. |
 | img-familiars-server | 3019 | familiars.imagineering.cc | Familiars (avatar/character) backend |
-| img-downstream-server | 3018 | - | Downstream API server |
+| img-downstream-server | 3018 | - | Downstream API server (guest service; managed from nickmeinhold/downstream `deploy/oci` since #291 Phase B — this repo only keeps the Caddy route + DNS + shared `lib/telegram.sh`) |
 
 ### Tech World (own subdomain, separate fleet)
 

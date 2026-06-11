@@ -11,7 +11,7 @@ Infrastructure monorepo for self-hosted services.
 | MinIO | S3-compatible file storage | storage.imagineering.cc |
 | [Caddy](./caddy/) | Reverse proxy with automatic HTTPS | - |
 | [Radicale](./radicale/) | CalDAV/CardDAV server | dav.imagineering.cc |
-| [downstream-server](./downstream-server/) | REST + SSE for the Downstream personal media library (guest service — not part of Imagineering) | api.downstream-storage.cc |
+| downstream-server | Guest service — not part of Imagineering. Ops live in [nickmeinhold/downstream `deploy/oci`](https://github.com/nickmeinhold/downstream/tree/main/deploy/oci); this repo only keeps the platform bits: the Caddy route for api.downstream-storage.cc, the DNS zone, and `scripts/lib/telegram.sh` (shared alert helper its host scripts source from `/opt/scripts/lib/`) | api.downstream-storage.cc |
 
 ## Infrastructure
 

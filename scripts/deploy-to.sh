@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy services to any VPS
 # Usage: ./scripts/deploy-to.sh <ip> [service]
-# Services: all, caddy, site, outline, kanbn, radicale, matrix, imagineering-contact-us, claudius, downstream-server, backups, scripts
+# Services: all, caddy, site, outline, kanbn, radicale, matrix, imagineering-contact-us, claudius, backups, scripts
 
 set -e
 
@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|downstream-server|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -80,33 +80,6 @@ deploy_scripts() {
     echo "Health check cron installed (hourly)"
 
     echo "Scripts deployed to /opt/scripts/"
-}
-
-deploy_downstream_reconciler() {
-    # Install the nightly reconcile_b2 cron + logrotate config on the host.
-    # `deploy_scripts` owns both the invoking script in /opt/scripts/ and
-    # the /etc/downstream-secrets/telegram.env envfile that the script reads
-    # via scripts/lib/telegram.sh. This function just places the cron entry
-    # and logrotate config — it no longer touches secrets at all (task #21).
-    echo "Setting up downstream reconcile_b2 nightly cron..."
-
-    local CRON_SRC="$REPO_ROOT/downstream-server/cron/reconcile-downstream"
-    local LOGROTATE_SRC="$REPO_ROOT/downstream-server/logrotate/reconcile-downstream"
-
-    if [ ! -f "$CRON_SRC" ] || [ ! -f "$LOGROTATE_SRC" ]; then
-        echo "ERROR: reconcile cron/logrotate sources missing in $REPO_ROOT/downstream-server/"
-        return 1
-    fi
-
-    ssh "$REMOTE" "mkdir -p ~/logs"
-
-    scp "$CRON_SRC" "$REMOTE":/tmp/reconcile-downstream.cron
-    scp "$LOGROTATE_SRC" "$REMOTE":/tmp/reconcile-downstream.logrotate
-    ssh "$REMOTE" "sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.cron /etc/cron.d/reconcile-downstream && \
-        sudo install -m 0644 -o root -g root /tmp/reconcile-downstream.logrotate /etc/logrotate.d/reconcile-downstream && \
-        rm -f /tmp/reconcile-downstream.cron /tmp/reconcile-downstream.logrotate"
-
-    echo "Reconcile cron installed (daily 04:15, logs at /home/nick/logs/reconcile-downstream.log)"
 }
 
 deploy_site() {
@@ -989,81 +962,6 @@ INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/claudius
     echo "  Check logs: ssh $REMOTE 'docker logs -f claudius'"
 }
 
-deploy_downstream_server() {
-    echo "Deploying downstream-server (Dart Shelf API + SQLite)..."
-
-    local DS_SECRETS="$REPO_ROOT/downstream-server/secrets.yaml"
-    # The downstream monorepo (sibling checkout). The Dockerfile copies
-    # `downstream-server/` and `packages/` from the monorepo root, so we
-    # need to rsync those plus the workspace `pubspec.yaml`.
-    local DS_SRC="${DOWNSTREAM_SRC:-$HOME/git/experiments/downstream}"
-
-    if [ ! -f "$DS_SECRETS" ]; then
-        echo "ERROR: downstream-server/secrets.yaml not found"
-        echo "Create from secrets.yaml.example and encrypt with: sops -e -i downstream-server/secrets.yaml"
-        return 1
-    fi
-
-    if [ ! -d "$DS_SRC/downstream-server" ] || [ ! -d "$DS_SRC/packages" ]; then
-        echo "ERROR: downstream monorepo not found at $DS_SRC"
-        echo "Expected sibling checkout containing downstream-server/ and packages/."
-        echo "Override with DOWNSTREAM_SRC=/path/to/downstream"
-        return 1
-    fi
-
-    # Generate .env from encrypted secrets.
-    echo "Generating .env from encrypted secrets..."
-    sops -d "$DS_SECRETS" | yq -r '"# downstream-server Configuration (auto-generated from secrets.yaml)
-TMDB_API_KEY=\(.tmdb_api_key)
-OMDB_API_KEY=\(.omdb_api_key)
-FIREBASE_PROJECT_ID=\(.firebase_project_id)
-FIREBASE_SERVICE_ACCOUNT_BASE64=\(.firebase_service_account_base64)
-DOWNSTREAM_API_KEY=\(.downstream_api_key)"' > "$REPO_ROOT/downstream-server/.env"
-
-    # Capture short git rev from the source tree — baked into /api/health.
-    local GIT_REV
-    GIT_REV=$(cd "$DS_SRC" && git rev-parse --short HEAD 2>/dev/null || echo dev)
-    echo "Building with GIT_REV=$GIT_REV"
-
-    # Stage host directories.
-    ssh "$REMOTE" "mkdir -p ~/apps/downstream-server/source ~/apps/downstream-server/data"
-
-    # Push docker-compose.yml + .env (but NOT secrets.yaml or source/, which
-    # is rsynced separately below to avoid --delete clobbering data/).
-    rsync -avz \
-        --exclude 'secrets.yaml' \
-        --exclude 'secrets.yaml.example' \
-        --exclude 'source/' \
-        --exclude 'data/' \
-        --exclude 'cron/' \
-        --exclude 'logrotate/' \
-        --exclude 'README.md' \
-        "$REPO_ROOT/downstream-server/" "$REMOTE":~/apps/downstream-server/
-
-    # Rsync monorepo source into ./source/ — context for the Docker build.
-    # Only the bits the Dockerfile needs: workspace pubspec, downstream-server,
-    # packages. --delete keeps the rsync tree clean across deploys.
-    rsync -avz --delete \
-        --exclude '.dart_tool' \
-        --exclude '.packages' \
-        --exclude 'build' \
-        "$DS_SRC/pubspec.yaml" \
-        "$DS_SRC/downstream-server" \
-        "$DS_SRC/packages" \
-        "$REMOTE":~/apps/downstream-server/source/
-
-    # Clean up local .env (only the encrypted secrets.yaml stays in repo).
-    rm -f "$REPO_ROOT/downstream-server/.env"
-
-    # Build and start. GIT_REV is consumed by docker-compose's build args.
-    ssh "$REMOTE" "cd ~/apps/downstream-server && GIT_REV=$GIT_REV docker compose up -d --build"
-
-    echo "downstream-server deployed!"
-    echo "  URL:    https://api.downstream-storage.cc"
-    echo "  Health: curl https://api.downstream-storage.cc/api/health"
-    echo "  Logs:   ssh $REMOTE 'docker logs -f img-downstream-server'"
-}
-
 deploy_lugh() {
     echo "Deploying Lugh (historian pen pal agent)..."
 
@@ -1218,18 +1116,12 @@ case $SERVICE in
     notify)
         deploy_notify
         ;;
-    downstream-reconciler|reconciler)
-        deploy_downstream_reconciler
-        ;;
-    downstream-server|server|downstream)
-        deploy_downstream_server
-        ;;
     familiars-server|familiars)
         deploy_familiars_server
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|downstream-server|backups|scripts|site|invite]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite]"
         exit 1
         ;;
 esac
