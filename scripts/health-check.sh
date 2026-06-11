@@ -51,8 +51,14 @@ if [ "$swap_total" -gt 0 ]; then
     fi
 fi
 
-# Check for unhealthy Docker containers
+# Check for unhealthy Docker containers. One-shot helper containers
+# (compose migrate/setup jobs like kanbn-migrate, *_minio_setup) exit 0 by
+# design and can sit in "Exited (0)" for weeks — a clean exit is not a
+# failure, so skip those and alert only on non-zero exits and restart
+# loops. (Without this the repo version alert-spams hourly; the
+# previously-deployed host copy had drifted and silently ignored them.)
 while read -r name status; do
+    [[ "$status" == "Exited (0)"* ]] && continue
     issues+=("Container <b>${name}</b>: ${status}")
 done < <(docker ps -a --filter "status=exited" --filter "status=restarting" --format "{{.Names}} {{.Status}}" 2>/dev/null)
 
