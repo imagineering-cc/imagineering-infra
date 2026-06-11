@@ -14,13 +14,12 @@ DISK_THRESHOLD=80
 MEMORY_THRESHOLD=90
 SWAP_THRESHOLD=50
 
-# downstream-server health: alert if total request rows fall below the previous
-# observed total (suggests data loss like the 2026-04-29 incident) or below an
-# absolute floor. The "previous total" is persisted between runs.
-DOWNSTREAM_HEALTH_URL="https://api.downstream-storage.cc/api/health"
-DOWNSTREAM_STATE_DIR="$HOME/.health-state"
-DOWNSTREAM_PREV_FILE="$DOWNSTREAM_STATE_DIR/downstream-prev-total"
-DOWNSTREAM_MIN_TOTAL=10
+# NOTE: the downstream-server /api/health data-loss canary moved to the
+# downstream repo (nickmeinhold/downstream
+# deploy/oci/scripts/health-check-downstream.sh, cron hourly :05) in the
+# #291 Phase B ops-move. This script keeps the shared-host checks below
+# (disk/memory/swap/exited containers), which cover img-downstream-server
+# as a container on the shared box.
 
 issues=()
 
@@ -52,37 +51,22 @@ if [ "$swap_total" -gt 0 ]; then
     fi
 fi
 
-# Check for unhealthy Docker containers
+# Check for unhealthy Docker containers. Known one-shot helper containers
+# (compose migrate/setup jobs) exit 0 by design and sit in "Exited (0)"
+# forever — a clean exit from THESE is not a failure. The skip is an
+# explicit name allowlist, NOT a blanket "Exited (0) is fine": a
+# long-running service that exits cleanly (docker stop, handled SIGTERM)
+# is still down and must alert. Extend the allowlist when adding new
+# one-shot jobs. (Without the skip the repo version alert-spams hourly;
+# the previously-deployed host copy had drifted and silently ignored
+# these containers.)
+ONESHOT_HELPERS_RE='^(img-)?(kanbn-migrate|outline[-_]minio_setup)$'
 while read -r name status; do
+    if [[ "$status" == "Exited (0)"* ]] && [[ "$name" =~ $ONESHOT_HELPERS_RE ]]; then
+        continue
+    fi
     issues+=("Container <b>${name}</b>: ${status}")
 done < <(docker ps -a --filter "status=exited" --filter "status=restarting" --format "{{.Names}} {{.Status}}" 2>/dev/null)
-
-# Check downstream-server request count (data-loss canary)
-mkdir -p "$DOWNSTREAM_STATE_DIR"
-ds_response=$(curl -sS --max-time 10 "$DOWNSTREAM_HEALTH_URL" 2>/dev/null)
-ds_curl_rc=$?
-if [ "$ds_curl_rc" -ne 0 ] || [ -z "$ds_response" ]; then
-    issues+=("downstream-server: /api/health unreachable (curl rc=${ds_curl_rc})")
-elif ! ds_total=$(echo "$ds_response" | jq -e '.requests.total' 2>/dev/null); then
-    issues+=("downstream-server: /api/health returned unexpected JSON")
-else
-    # Absolute floor
-    if [ "$ds_total" -lt "$DOWNSTREAM_MIN_TOTAL" ]; then
-        issues+=("downstream-server: requests.total=${ds_total} below floor ${DOWNSTREAM_MIN_TOTAL}")
-    fi
-    # Drop vs previous snapshot
-    if [ -f "$DOWNSTREAM_PREV_FILE" ]; then
-        ds_prev=$(cat "$DOWNSTREAM_PREV_FILE" 2>/dev/null)
-        if [ -n "$ds_prev" ] && [ "$ds_total" -lt "$ds_prev" ]; then
-            issues+=("downstream-server: requests.total dropped ${ds_prev} → ${ds_total}")
-        fi
-    fi
-    # Persist the new high-water mark (only ratchet up, so a transient drop
-    # still alerts on the next run rather than silently re-baselining low).
-    if [ ! -f "$DOWNSTREAM_PREV_FILE" ] || [ "$ds_total" -gt "$(cat "$DOWNSTREAM_PREV_FILE" 2>/dev/null || echo 0)" ]; then
-        echo "$ds_total" > "$DOWNSTREAM_PREV_FILE"
-    fi
-fi
 
 # Send alert if any issues found
 if [ ${#issues[@]} -gt 0 ]; then
