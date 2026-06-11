@@ -31,6 +31,12 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       - ADMIN_IDS=${ADMIN_IDS:-}
       - MATRIX_ALWAYS_RESPOND_ROOMS=${MATRIX_ALWAYS_RESPOND_ROOMS:-}
+      # Bridge appservice bots excluded from DM member counting (portal rooms
+      # carry the bridge bot as an extra member). Add other bridges' bot MXIDs
+      # here once verified against the live bridge registrations.
+      - BRIDGE_BOT_IDS=${BRIDGE_BOT_IDS:-@whatsappbot:imagineering.cc}
+      # River's WhatsApp-bridge management room — enables start_private_chat.
+      - WHATSAPP_MANAGEMENT_ROOM=${WHATSAPP_MANAGEMENT_ROOM:-!JUo0oTBHrPUJOq76WrqjAO3Ioc6rbT4cOujGUPxJPc4}
       - CALENDAR_URL=${CALENDAR_URL:-}
       - EVENT_TIMEZONE=${EVENT_TIMEZONE:-}
       - DEPLOY_ANNOUNCE_GROUP_ID=${DEPLOY_ANNOUNCE_GROUP_ID:-}
