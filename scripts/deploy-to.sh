@@ -46,6 +46,12 @@ dotenv_quote() {
 # and print one dotenv-safe `KEY="value"` line. Mirrors the old yq
 # string-interpolation templates (missing keys still render as "null")
 # without echoing plaintext anywhere but the target .env.
+#
+# KNOWN NORMALIZATION: $(...) strips TRAILING newlines, so a value ending in
+# literal LF(s) is emitted without them — values cannot round-trip a trailing
+# newline. Deliberate trade-off: the old interpolation corrupted the entire
+# file on such values (line split), and no consumer of these .envs treats a
+# trailing LF as significant. Interior newlines round-trip exactly (\n).
 env_kv() {
     local key=$1 expr=$2 val
     val=$(yq -r "$expr")
