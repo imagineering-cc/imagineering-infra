@@ -67,7 +67,10 @@ gen_env() {
     local yaml pair
     yaml=$(cat)
     for pair in "$@"; do
-        env_kv "${pair%%=*}" "${pair#*=}" <<<"$yaml"
+        # Pipe (NOT herestring): bash <5.1 — incl. macOS system bash 3.2 —
+        # spools herestring content to a temp file, which would write the
+        # decrypted YAML to disk once per key. A pipe stays in memory.
+        printf '%s\n' "$yaml" | env_kv "${pair%%=*}" "${pair#*=}"
     done
 }
 
