@@ -51,14 +51,20 @@ if [ "$swap_total" -gt 0 ]; then
     fi
 fi
 
-# Check for unhealthy Docker containers. One-shot helper containers
-# (compose migrate/setup jobs like kanbn-migrate, *_minio_setup) exit 0 by
-# design and can sit in "Exited (0)" for weeks — a clean exit is not a
-# failure, so skip those and alert only on non-zero exits and restart
-# loops. (Without this the repo version alert-spams hourly; the
-# previously-deployed host copy had drifted and silently ignored them.)
+# Check for unhealthy Docker containers. Known one-shot helper containers
+# (compose migrate/setup jobs) exit 0 by design and sit in "Exited (0)"
+# forever — a clean exit from THESE is not a failure. The skip is an
+# explicit name allowlist, NOT a blanket "Exited (0) is fine": a
+# long-running service that exits cleanly (docker stop, handled SIGTERM)
+# is still down and must alert. Extend the allowlist when adding new
+# one-shot jobs. (Without the skip the repo version alert-spams hourly;
+# the previously-deployed host copy had drifted and silently ignored
+# these containers.)
+ONESHOT_HELPERS_RE='^(img-)?(kanbn-migrate|outline[-_]minio_setup)$'
 while read -r name status; do
-    [[ "$status" == "Exited (0)"* ]] && continue
+    if [[ "$status" == "Exited (0)"* ]] && [[ "$name" =~ $ONESHOT_HELPERS_RE ]]; then
+        continue
+    fi
     issues+=("Container <b>${name}</b>: ${status}")
 done < <(docker ps -a --filter "status=exited" --filter "status=restarting" --format "{{.Names}} {{.Status}}" 2>/dev/null)
 
