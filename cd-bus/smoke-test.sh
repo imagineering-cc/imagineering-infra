@@ -26,6 +26,13 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/publish" \
   -H 'content-type: application/json' -d "{\"service\":\"$SVC\"}")
 [ "$code" = "401" ] && ok "unauthorized publish rejected (401)" || no "auth: got $code, want 401"
 
+# 2b. service grammar: a service name that can't be subscribed to must be
+# rejected at publish time (no events into unreachable channels).
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/publish" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"service":"bad/name"}')
+[ "$code" = "400" ] && ok "malformed service name rejected (400)" || no "service grammar: got $code, want 400"
+
 # 3. live fan-out: subscribe in the background, then publish, expect the event
 sse_out=$(mktemp)
 ( curl -sN --max-time 4 "$BASE/events/$SVC" > "$sse_out" ) &

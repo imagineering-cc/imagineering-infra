@@ -27,14 +27,28 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/publish") {
+      // Fail CLOSED when the secret is unbound (misdeploy / forgotten
+      // `wrangler secret put`): without this guard the comparison below
+      // would accept the literal header "Bearer undefined".
+      if (typeof env.PUBLISH_TOKEN !== "string" || env.PUBLISH_TOKEN.length === 0) {
+        return json({ error: "relay misconfigured: PUBLISH_TOKEN is not bound" }, 500);
+      }
       if ((request.headers.get("authorization") || "") !== `Bearer ${env.PUBLISH_TOKEN}`) {
         return json({ error: "unauthorized" }, 401);
       }
       let event;
       try { event = await request.json(); }
       catch { return json({ error: "body is not valid JSON" }, 400); }
-      if (!event || typeof event.service !== "string" || event.service === "") {
-        return json({ error: "event.service (non-empty string) is required" }, 400);
+      // Same grammar as the /events route below — otherwise a publish to
+      // "my/cool/image" succeeds but is impossible to subscribe to, and the
+      // retained event replays a state no host will ever see.
+      if (!event || typeof event.service !== "string" || !SERVICE_RE.test(event.service)) {
+        return json({ error: "event.service must match [A-Za-z0-9._-]+" }, 400);
+      }
+      // digest, when present, is what subscribers deploy — reject junk at the
+      // boundary rather than persisting it for replay.
+      if ("digest" in event && typeof event.digest !== "string") {
+        return json({ error: "event.digest must be a string when present" }, 400);
       }
       // Route to the per-service Durable Object and return its result verbatim.
       const stub = env.BUS.get(env.BUS.idFromName(event.service));
@@ -42,10 +56,11 @@ export default {
     }
 
     // Service names: GHCR-image-name shaped (alnum, dot, underscore, hyphen).
-    const m = url.pathname.match(/^\/events\/([A-Za-z0-9._-]+)$/);
-    if (request.method === "GET" && m) {
+    const m = url.pathname.match(/^\/events\/(.+)$/);
+    if (request.method === "GET" && m && SERVICE_RE.test(m[1])) {
       const stub = env.BUS.get(env.BUS.idFromName(m[1]));
-      return stub.fetch("https://do/subscribe");
+      // Forward headers so the DO can honor Last-Event-ID on reconnect.
+      return stub.fetch(new Request("https://do/subscribe", { headers: request.headers }));
     }
 
     return json({ error: "not found" }, 404);
@@ -69,7 +84,12 @@ export class ServiceChannel {
       // Persist the last event so a subscriber connecting after a DO eviction
       // (or after host downtime) still receives the most recent state. This is
       // the replay handshake between the push (SSE) and pull (poll) legs.
-      const id = Date.now();
+      //
+      // The id is MONOTONIC, not just a timestamp: two publishes inside the
+      // same millisecond must not mint the same id, because subscribers dedupe
+      // replays by id — a collision would silently swallow the second event.
+      const prev = await this.state.storage.get("last");
+      const id = Math.max(Date.now(), (prev?.id ?? 0) + 1);
       await this.state.storage.put("last", { id, event });
       const frame = sseFrame(id, event);
       // Do NOT await the per-client writes: a TransformStream's readable side
@@ -79,7 +99,9 @@ export class ServiceChannel {
       for (const w of targets) {
         w.write(frame).catch(() => this.sessions.delete(w)); // dead connection, drop it
       }
-      return json({ ok: true, service: event.service, delivered: targets.length });
+      // `subscribers`, not `delivered`: writes are fire-and-forget, so this
+      // counts attempted fan-out targets — actual delivery is unobservable here.
+      return json({ ok: true, service: event.service, subscribers: targets.length });
     }
 
     if (url.pathname === "/subscribe") {
@@ -100,9 +122,13 @@ export class ServiceChannel {
       });
 
       // Replay the last retained event immediately, so a freshly (re)connected
-      // host converges to current state without waiting for the next publish.
+      // host converges to current state without waiting for the next publish —
+      // UNLESS the client proves it already saw it via Last-Event-ID (standard
+      // SSE resumption; the worker route forwards request headers through).
       const last = await this.state.storage.get("last");
-      writer.write(last ? sseFrame(last.id, last.event) : enc(": connected\n\n"))
+      const seenId = request.headers.get("last-event-id");
+      const replay = last && String(last.id) !== seenId;
+      writer.write(replay ? sseFrame(last.id, last.event) : enc(": connected\n\n"))
         .catch(() => this.sessions.delete(writer));
 
       // Heartbeat keeps the connection warm through proxies and lets us reap
@@ -129,7 +155,10 @@ export class ServiceChannel {
       w.write(frame).catch(() => this.sessions.delete(w)); // non-blocking; reap dead
     }
     // Reschedule only while someone is listening, so an idle channel costs
-    // nothing.
+    // nothing. Because reaping happens in async .catch() handlers, the size
+    // check can race one tick behind reality — worst case is a single extra
+    // "ghost" alarm 25s later that finds zero sessions and stops. Bounded,
+    // accepted.
     if (this.sessions.size > 0) {
       await this.state.storage.setAlarm(Date.now() + HEARTBEAT_MS);
     }
@@ -137,6 +166,10 @@ export class ServiceChannel {
 }
 
 const HEARTBEAT_MS = 25_000;
+// One grammar for service names on BOTH the publish and subscribe sides —
+// GHCR-image-name shaped. Asymmetry here would let events be published into
+// channels no subscriber can reach.
+const SERVICE_RE = /^[A-Za-z0-9._-]+$/;
 const encoder = new TextEncoder();
 const enc = (s) => encoder.encode(s);
 // SSE frame: `id:` enables Last-Event-ID resumption; `data:` carries the JSON.

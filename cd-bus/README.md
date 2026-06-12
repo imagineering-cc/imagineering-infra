@@ -13,13 +13,16 @@ opening an inbound port. This is the keystone (component 2) of the deploy-bus.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | — | liveness |
-| `POST` | `/publish` | `Bearer $PUBLISH_TOKEN` | fan an event to subscribers of `event.service` |
-| `GET` | `/events/:service` | — | SSE stream; replays the last retained event on connect |
+| `POST` | `/publish` | `Bearer $PUBLISH_TOKEN` | fan an event to subscribers of `event.service`; returns `subscribers` (attempted fan-out count — delivery is fire-and-forget). Fails closed (500) if the secret is unbound; `service` must match the same grammar as `/events/:service`. |
+| `GET` | `/events/:service` | — | SSE stream; replays the last retained event on connect unless `Last-Event-ID` proves it was already seen |
 
 One **Durable Object instance per service** (`idFromName(service)`) holds that
 service's open SSE connections and its last-published event. The retained event
-is replayed on every (re)connect — the handshake that lets the host's poll
-backstop and this push leg converge.
+is replayed on (re)connect — unless the client sends a `Last-Event-ID` header
+proving it already saw it (standard SSE resumption). This is the handshake that
+lets the host's poll backstop and this push leg converge. Event ids are
+monotonic (not bare timestamps), so id-based dedupe on the subscriber side is
+safe even across same-millisecond publishes.
 
 ## Event shape
 
