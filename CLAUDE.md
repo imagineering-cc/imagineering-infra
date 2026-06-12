@@ -51,7 +51,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 | Caddy | 80/443 | - | Reverse proxy, auto-TLS via Let's Encrypt |
 | img-outline | 3012 | outline.imagineering.cc | Team wiki (Notion-like) |
 | (img-outline-minio) | 9010 | storage.imagineering.cc | S3-compatible file storage for img-outline |
-| (img-kanbn — see xdeca) | 3003 | kan.imagineering.cc | Kanban — currently shares xdeca's kanbn instance |
+| img-kanbn | 3013 | kan.imagineering.cc | Kanban (Trello alternative) |
 | Radicale | 5232/5233 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
 | matrix-continuwuity | 8008 | matrix.imagineering.cc | Matrix homeserver (Conduit fork) |
 | (matrix bridges) | - | - | mautrix-signal/whatsapp/telegram/discord, plus relay-bot + relay-bot-hf |
@@ -62,6 +62,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 | youtube-rag | 3010/8010 | rag.imagineering.cc, rag-api.imagineering.cc | YouTube transcript RAG (frontend + backend + chroma) |
 | img-contact | 3014 | invite.imagineering.cc | Contact-form / QR invite landing |
 | Claudius | - | - | Headless email-polling Claude Code agent |
+| cd-bus | - | cd-bus.nick-meinhold.workers.dev | Deploy-bus SSE relay (Cloudflare Worker + Durable Object, source in `cd-bus/`) — fans CI `image.published` events to host subscribers; pilot live on downstream-server since 2026-06-12 |
 
 ### Imagineering (internal — bound to 127.0.0.1, Caddy-fronted, Bearer auth)
 
