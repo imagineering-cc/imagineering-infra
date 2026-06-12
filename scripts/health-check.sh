@@ -70,8 +70,8 @@ done < <(docker ps -a --filter "status=exited" --filter "status=restarting" --fo
 
 # Send alert if any issues found
 if [ ${#issues[@]} -gt 0 ]; then
-    if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') ALERT but missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+    if [ -z "$NOTIFY_API_KEY" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ALERT but missing NOTIFY_API_KEY"
         printf '  - %s\n' "${issues[@]}"
         exit 1
     fi
