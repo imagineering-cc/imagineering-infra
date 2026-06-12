@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|invite|galaxy|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -129,6 +129,29 @@ deploy_invite() {
     ssh "$REMOTE" "mkdir -p ~/apps/invite"
     rsync -avz --delete "$INVITE_SRC/" "$REMOTE":apps/invite/
     echo "Invite deployed to ~/apps/invite (mounted into Caddy as /srv/invite)"
+}
+
+deploy_galaxy() {
+    # Mautrix Galaxy — a standalone three.js teaching world (spherical gravity,
+    # planets = bridge platforms) served at galaxy.imagineering.cc. Self-contained
+    # single HTML file; the only runtime dependency is three.js from a CDN.
+    # Source lives in this repo (galaxy/index.html), recovered from the retired
+    # Bridgekeeper's Primer game so it can be shared on its own.
+    #
+    # Destination is ~/apps/galaxy — the Caddy container bind-mounts
+    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml),
+    # same convention as the invite mount.
+    local GALAXY_SRC="$REPO_ROOT/galaxy"
+
+    if [ ! -f "$GALAXY_SRC/index.html" ]; then
+        echo "ERROR: galaxy/index.html not found at $GALAXY_SRC"
+        return 1
+    fi
+
+    echo "Deploying galaxy.imagineering.cc..."
+    ssh "$REMOTE" "mkdir -p ~/apps/galaxy"
+    rsync -avz --delete "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
+    echo "Galaxy deployed to ~/apps/galaxy (mounted into Caddy as /srv/galaxy)"
 }
 
 deploy_contact() {
@@ -1054,6 +1077,7 @@ case $SERVICE in
         deploy_service caddy
         deploy_site
         deploy_invite
+        deploy_galaxy
         deploy_outline
         deploy_kanbn
         deploy_radicale
@@ -1092,6 +1116,9 @@ case $SERVICE in
     invite)
         deploy_invite
         ;;
+    galaxy)
+        deploy_galaxy
+        ;;
     imagineering-contact-us|contact)
         deploy_contact
         ;;
@@ -1121,7 +1148,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite|galaxy]"
         exit 1
         ;;
 esac
