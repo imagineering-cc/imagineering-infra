@@ -67,8 +67,40 @@ deploy_scripts() {
         echo "  Add telegram_bot_token, telegram_chat_id, telegram_thread_id to enable alerts"
     fi
 
+    # Install the notify-secrets envfile (root:nick 0640) — the credential
+    # lib/telegram.sh actually uses since alerts were rerouted through the
+    # local notify proxy (claude-tasks#441: gremlin_xdeca_bot is muted in
+    # its target group, so direct Telegram sends were silently dropped).
+    # telegram.env above is kept for now: xdeca's release-watch and other
+    # non-lib consumers still hold those creds; retiring it is a separate
+    # subtractive pass.
+    local NOTIFY_SECRETS="$REPO_ROOT/notify/secrets.yaml"
+    if [ -f "$NOTIFY_SECRETS" ] && sops -d "$NOTIFY_SECRETS" | yq -e '.notify_api_key' > /dev/null 2>&1; then
+        echo "Installing /etc/downstream-secrets/notify.env..."
+        local NOTIFY_KEY
+        NOTIFY_KEY=$(sops -d "$NOTIFY_SECRETS" | yq -r '.notify_api_key')
+        # Build locally, scp, install with restrictive perms — same
+        # pattern as telegram.env above. The file is consumed by bash
+        # `source` (not docker compose's dotenv parser), so %q gives the
+        # correct shell-quoting even if the key ever contains
+        # shell-significant bytes.
+        local NOTIFY_TMP
+        NOTIFY_TMP=$(mktemp)
+        printf 'NOTIFY_API_KEY=%q\n' "$NOTIFY_KEY" > "$NOTIFY_TMP"
+        chmod 0600 "$NOTIFY_TMP"
+        scp -q "$NOTIFY_TMP" "$REMOTE":/tmp/notify.env
+        ssh "$REMOTE" "sudo mkdir -p /etc/downstream-secrets && \
+            sudo install -m 0640 -o root -g nick /tmp/notify.env /etc/downstream-secrets/notify.env && \
+            rm -f /tmp/notify.env"
+        rm -f "$NOTIFY_TMP"
+        echo "  Notify envfile installed (mode 0640 root:nick)"
+    else
+        echo "NOTE: No notify_api_key in notify/secrets.yaml — cron alerts disabled"
+        echo "  lib/telegram.sh will no-op until /etc/downstream-secrets/notify.env exists"
+    fi
+
     # Set up health check cron. Tokens are NOT inlined here any more — the
-    # script reads /etc/downstream-secrets/telegram.env via lib/telegram.sh.
+    # script reads /etc/downstream-secrets/notify.env via lib/telegram.sh.
     echo "Installing /etc/cron.d/health-check..."
     ssh "$REMOTE" "mkdir -p ~/logs && printf '%s\n' \
         'SHELL=/bin/bash' \
