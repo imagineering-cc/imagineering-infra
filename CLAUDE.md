@@ -453,7 +453,9 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 | `OUTLINE_API_KEY` | Outline API key |
 | `RADICALE_BASE_URL` | Radicale CalDAV URL |
 | `BRIDGE_BOT_IDS` | Bridge appservice bot MXIDs excluded from DM member counting (portal-aware isDm) |
-| `WHATSAPP_MANAGEMENT_ROOM` | River's WhatsApp-bridge management room; enables the `start_private_chat` tool |
+| `WHATSAPP_MANAGEMENT_ROOM` | River's WhatsApp-bridge management room; adds `whatsapp` to `start_private_chat`'s platform enum |
+| `TELEGRAM_MANAGEMENT_ROOM` | River's Telegram-bridge management room; adds `telegram` to the enum |
+| `SIGNAL_MANAGEMENT_ROOM` / `DISCORD_MANAGEMENT_ROOM` | Same pattern; unset until those bridge logins exist |
 
 ## Setup
 

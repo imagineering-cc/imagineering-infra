@@ -36,8 +36,13 @@ services:
       # against the live bridge registrations (2026-06-11). Also keeps the
       # bot from treating bridge MANAGEMENT rooms (bot + bridge bot) as DMs.
       - BRIDGE_BOT_IDS=${BRIDGE_BOT_IDS:-@whatsappbot:imagineering.cc,@signalbot:imagineering.cc,@telegrambot:imagineering.cc,@discordbot:imagineering.cc}
-      # River's WhatsApp-bridge management room — enables start_private_chat.
+      # River's per-platform bridge management rooms — each one configured
+      # adds that platform to start_private_chat's enum (dreamfinder#103:
+      # config presence IS platform existence). Signal/Discord stay unset
+      # until their bridge logins exist (Signal: SIM re-registration;
+      # Discord: account creation — both Nick's hands).
       - WHATSAPP_MANAGEMENT_ROOM=${WHATSAPP_MANAGEMENT_ROOM:-!JUo0oTBHrPUJOq76WrqjAO3Ioc6rbT4cOujGUPxJPc4}
+      - TELEGRAM_MANAGEMENT_ROOM=${TELEGRAM_MANAGEMENT_ROOM:-!xJfXtfQlhHWzgxxTaxRVFcCp6BDjikWjysvB4xrxGyU}
       - CALENDAR_URL=${CALENDAR_URL:-}
       - EVENT_TIMEZONE=${EVENT_TIMEZONE:-}
       - DEPLOY_ANNOUNCE_GROUP_ID=${DEPLOY_ANNOUNCE_GROUP_ID:-}
