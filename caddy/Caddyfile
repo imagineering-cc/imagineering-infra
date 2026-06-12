@@ -57,6 +57,15 @@ imagineering.cc {
     }
 }
 
+# --- The Bridgekeeper's Primer (static teaching game from matrix-chat-superbridge) ---
+# try_files lets /land serve land.html (clean URL, matches the game server's routes).
+
+primer.imagineering.cc {
+    root * /srv/primer
+    try_files {path} {path}.html
+    file_server
+}
+
 # --- Invite page (QR slide for meetups + shareable join URL) ---
 
 invite.imagineering.cc {

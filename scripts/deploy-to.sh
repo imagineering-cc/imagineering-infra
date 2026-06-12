@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|invite|primer|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -129,6 +129,31 @@ deploy_invite() {
     ssh "$REMOTE" "mkdir -p ~/apps/invite"
     rsync -avz --delete "$INVITE_SRC/" "$REMOTE":apps/invite/
     echo "Invite deployed to ~/apps/invite (mounted into Caddy as /srv/invite)"
+}
+
+deploy_primer() {
+    # The Bridgekeeper's Primer — static teaching game served at
+    # primer.imagineering.cc. Source lives in the matrix-chat-superbridge repo
+    # (primer/). Only the static files are published: server.mjs (the adaptive
+    # ractor backend) shells out to a local Claude Code login and cannot run on
+    # the server, so the public build is the game's documented "degraded mode".
+    #
+    # Destination is ~/apps/primer — the Caddy container bind-mounts
+    # /home/nick/apps/primer -> /srv/primer:ro (see caddy/docker-compose.yml),
+    # same convention as the invite mount.
+    local PRIMER_SRC="$HOME/git/orgs/imagineering/matrix-chat-superbridge/primer"
+
+    if [ ! -f "$PRIMER_SRC/index.html" ]; then
+        echo "ERROR: primer source not found at $PRIMER_SRC"
+        return 1
+    fi
+
+    echo "Deploying primer.imagineering.cc..."
+    ssh "$REMOTE" "mkdir -p ~/apps/primer"
+    rsync -avz --delete \
+        "$PRIMER_SRC/index.html" "$PRIMER_SRC/land.html" "$PRIMER_SRC/mic-worklet.js" \
+        "$REMOTE":apps/primer/
+    echo "Primer deployed to ~/apps/primer (mounted into Caddy as /srv/primer)"
 }
 
 deploy_contact() {
@@ -1054,6 +1079,7 @@ case $SERVICE in
         deploy_service caddy
         deploy_site
         deploy_invite
+        deploy_primer
         deploy_outline
         deploy_kanbn
         deploy_radicale
@@ -1092,6 +1118,9 @@ case $SERVICE in
     invite)
         deploy_invite
         ;;
+    primer)
+        deploy_primer
+        ;;
     imagineering-contact-us|contact)
         deploy_contact
         ;;
@@ -1121,7 +1150,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite|primer]"
         exit 1
         ;;
 esac
