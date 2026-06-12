@@ -18,6 +18,16 @@
 # Caddy-fronted hostname: health-check alerts fire precisely when Caddy or
 # containers are down, so the alert path must not depend on Caddy.
 #
+# NARROWED FAILURE MODEL (known, accepted): the notify container is itself
+# a container on this host. If Docker or notify is down, the alert is lost
+# (stderr breadcrumb in the cron log only) — this path cannot announce the
+# death of its own transport. Mitigations: the docker-watchdog cron
+# restarts dead containers, and host-level liveness is watched externally
+# (Melbourne peer watcher). A direct-Telegram fallback was considered and
+# rejected: the only other bot creds on this box belong to a bot that is
+# muted in its target group, which is the silent-drop failure this lib
+# exists to fix.
+#
 # Configuration: NOTIFY_API_KEY (required), NOTIFY_URL (optional, defaults
 # to the local listener). If not already in the environment, this lib tries
 # to source /etc/downstream-secrets/notify.env (root:nick 0640) so the key
@@ -89,9 +99,13 @@ send_telegram_alert() {
     "$(notify_json_escape "$message")")
   # Capture curl output. On non-zero exit, emit a one-line stderr message
   # so the cron job's log carries a breadcrumb for the post-mortem.
+  # The Authorization header is fed via process substitution (-H @file)
+  # rather than argv, so the API key never appears in `ps` output or
+  # /proc/*/cmdline while the send is in flight. The payload stays in
+  # argv — alert text is operational, not secret.
   local curl_out curl_rc
   curl_out=$(curl -sS --max-time 10 -X POST "$NOTIFY_URL/send" \
-    -H "Authorization: Bearer $NOTIFY_API_KEY" \
+    -H @<(printf 'Authorization: Bearer %s\n' "$NOTIFY_API_KEY") \
     -H "Content-Type: application/json" \
     -d "$payload" 2>&1) || curl_rc=$?
   curl_rc=${curl_rc:-0}

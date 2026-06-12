@@ -149,10 +149,11 @@ notify without holding the bot token. See
 The template inlines the `tg()` helper rather than sourcing it from
 `scripts/lib/`, on purpose: a watcher should be a single self-contained
 file you can `scp` to the target box without dragging the repo. The
-existing `scripts/lib/telegram.sh` is a different abstraction — it talks
-*directly* to the Telegram bot API (needs `TELEGRAM_BOT_TOKEN`); use it
-when you need MarkdownV2 escaping or threaded replies. For watchers,
-prefer `notify.imagineering.cc`.
+existing `scripts/lib/telegram.sh` now also routes through notify (it
+talks to the LOCAL listener on `127.0.0.1:8090` and sources
+`/etc/downstream-secrets/notify.env`) — it exists for repo-deployed cron
+scripts that want the shared HTML-escape helper. For watchers, keep the
+inlined `tg()` + `notify.imagineering.cc`.
 
 Credentials live at `~/.config/imagineering/notify-credentials` on the
 Sydney box (mode 0600, exports `NOTIFY_URL` and `NOTIFY_API_KEY`). The
