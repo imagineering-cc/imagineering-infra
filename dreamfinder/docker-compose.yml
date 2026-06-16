@@ -43,6 +43,13 @@ services:
       # Discord: account creation — both Nick's hands).
       - WHATSAPP_MANAGEMENT_ROOM=${WHATSAPP_MANAGEMENT_ROOM:-!JUo0oTBHrPUJOq76WrqjAO3Ioc6rbT4cOujGUPxJPc4}
       - TELEGRAM_MANAGEMENT_ROOM=${TELEGRAM_MANAGEMENT_ROOM:-!xJfXtfQlhHWzgxxTaxRVFcCp6BDjikWjysvB4xrxGyU}
+      # SIGNAL parked dark 2026-06-12: River's login linked + room ready
+      # (!N5PcCDLZSPgkkHNAU05ZFa_WCjcSoij2QMD6-0olOyc) but two bugs block delivery -
+      # (1) start_private_chat sends UNPREFIXED `start-chat`, which mautrix-signal
+      # rejects (needs `!signal ` prefix); (2) River's signal login fails contact
+      # discovery ("websocket is nil"). Re-enable only after both are fixed +
+      # verified e2e. See claude-tasks #1/#3.
+      # - SIGNAL_MANAGEMENT_ROOM=${SIGNAL_MANAGEMENT_ROOM:-!N5PcCDLZSPgkkHNAU05ZFa_WCjcSoij2QMD6-0olOyc}
       - CALENDAR_URL=${CALENDAR_URL:-}
       - EVENT_TIMEZONE=${EVENT_TIMEZONE:-}
       - DEPLOY_ANNOUNCE_GROUP_ID=${DEPLOY_ANNOUNCE_GROUP_ID:-}
