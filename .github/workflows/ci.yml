@@ -41,8 +41,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ubuntu-latest ships docker + yq, so the dotenv check runs against the
-      # real container runtime and the yq check against real mikefarah yq.
+      # Install mikefarah yq explicitly rather than relying on it being
+      # preinstalled on the runner. REQUIRE_ALL=1 (below) already makes a
+      # missing yq a HARD failure, so this prevents *spurious* CI failures if a
+      # future ubuntu-latest image drops yq — it does not affect what the test
+      # asserts (a missing yq could never pass silently). Pinned to a release
+      # so the binary is deterministic. docker is still taken from the runner;
+      # ubuntu-latest ships it, and REQUIRE_ALL=1 fails loudly if it ever stops.
+      - name: Install yq (mikefarah)
+        run: |
+          YQ_VERSION=v4.44.3
+          sudo curl -fsSL \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
       # REQUIRE_ALL=1 turns a missing tool into a hard failure rather than a
       # vacuous skip, so a future runner-image change that drops yq/docker
       # fails loudly instead of passing green with the checks silently skipped.
