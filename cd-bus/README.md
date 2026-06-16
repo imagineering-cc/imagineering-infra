@@ -6,7 +6,10 @@ opening an inbound port. This is the keystone (component 2) of the deploy-bus.
 
 > Full design + rationale: [The Imagineering Deploy Bus](https://outline.imagineering.cc/doc/the-imagineering-deploy-bus-qz9QscpP6Q)
 
-**Deployed:** https://cd-bus.nick-meinhold.workers.dev (Cloudflare Worker + Durable Object)
+**Deployed:** https://cd-bus.imagineering.cc (Cloudflare Worker + Durable Object).
+The legacy `https://cd-bus.nick-meinhold.workers.dev` host stays live in parallel
+until every subscriber's `BUS_URL` has moved to the custom domain, then retires
+(`workers_dev: false`).
 
 ## Routes
 
@@ -103,8 +106,8 @@ public (pilot) mode instantly.
 - [x] **Constant-time token compare** on `/publish` (and `/events`) — done.
 - [x] **Subscribe-auth on `/events`** — implemented as enforce-when-bound; flip
   on via the runbook above before fleet rollout (claude-tasks #16).
-- [ ] **Custom domain** — move off `*.workers.dev` to `cd-bus.imagineering.cc`
-  (Cloudflare custom domain + DNS; zone `1444f67680d10386df2a55e5f016e2b2`).
-  Needs a `wrangler deploy` under Nick's Cloudflare OAuth + a DNS record, then
-  update the announce job URL and every subscriber's `BUS_URL`. Deploy-gated;
-  not in the worker source.
+- [x] **Custom domain** — `cd-bus.imagineering.cc` is live (declarative
+  `custom_domain` route in `wrangler.jsonc`; zone `1444f67680d10386df2a55e5f016e2b2`).
+  `workers.dev` is kept live alongside it (`workers_dev: true`) until subscribers
+  migrate. **Still TODO to fully cut over:** update the CI announce job URL and
+  every subscriber's `BUS_URL` to the custom domain, then set `workers_dev: false`.
