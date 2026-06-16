@@ -42,10 +42,20 @@ dotenv_quote() {
 # Every byte here is significant to at least one consumer.
 ADV=$'a"b$c#d&e/f\\g`h i: literal\nsecond-line*x'
 
+# REQUIRE_ALL=1 (set by CI) forbids vacuous passes: if docker or yq is missing,
+# their checks fail instead of degrading to a structural-only / skipped check.
+# This keeps CI from silently going green on a runner image that drops a tool.
+REQUIRE_ALL=${REQUIRE_ALL:-0}
+
 PASS=0
 FAIL=0
 ok()   { echo "  ok   - $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  FAIL - $1"; FAIL=$((FAIL + 1)); }
+# Either skip (local convenience) or hard-fail (REQUIRE_ALL, i.e. CI).
+skip_or_fail() {
+    if [ "$REQUIRE_ALL" = "1" ]; then bad "$1 (REQUIRE_ALL set — tool must be present in CI)";
+    else echo "  skip - $1"; fi
+}
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -80,7 +90,7 @@ YML
             bad "container runtime value differs"
         fi
     else
-        echo "  skip - docker present but 'compose run' failed (no daemon?); doing structural check"
+        skip_or_fail "docker present but 'compose run' failed (no daemon?); structural check only"
         # Structural fallback.
         if grep -q '^VAL=".*"$' "$WORK/.env"; then
             ok "dotenv line is well-formed double-quoted"
@@ -89,7 +99,7 @@ YML
         fi
     fi
 else
-    echo "  skip - docker unavailable; structural check only"
+    skip_or_fail "docker unavailable; structural check only"
     # Without docker we can still assert the quoting is well-formed: the value
     # is wrapped in double quotes and contains no UNescaped " inside.
     line=$(cat "$WORK/.env")
@@ -125,7 +135,7 @@ YML
     if [ "$GOT_SECRET" = "$ADV" ]; then ok "yq secret value round-trips"; else bad "yq secret differs"; fi
     if [ "$GOT_KEY" = "key-${ADV}" ]; then ok "yq key name round-trips"; else bad "yq key differs"; fi
 else
-    echo "  skip - yq unavailable"
+    skip_or_fail "yq unavailable"
 fi
 
 # --- 4. Drift guard: the helpers must still exist in deploy-to.sh -----------

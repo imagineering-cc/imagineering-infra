@@ -90,8 +90,15 @@ deploy_scripts() {
         SECRETS_TMP=$(mktemp)
         # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
         # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # ConnectTimeout bounds the remote leg: the abort case is often an
+        # unreachable host, and the trap must not hang ~120s on a dead TCP
+        # connect. Save any pre-existing EXIT trap and restore it on success
+        # rather than clearing unconditionally, so an outer trap (none today)
+        # would survive.
+        local SECRETS_PREV_TRAP
+        SECRETS_PREV_TRAP=$(trap -p EXIT)
         # shellcheck disable=SC2064  # expand SECRETS_TMP now, intentional
-        trap "rm -f '$SECRETS_TMP'; ssh '$REMOTE' 'rm -f /tmp/telegram.env' 2>/dev/null || true" EXIT
+        trap "rm -f '$SECRETS_TMP'; ssh -o ConnectTimeout=5 '$REMOTE' 'rm -f /tmp/telegram.env' 2>/dev/null || true" EXIT
         # Strip null/empty values so the envfile is clean (e.g. THREAD_ID
         # is optional and may legitimately be missing). Values are shell-quoted
         # (printf %q via shell_env_line) so a token with shell-significant bytes
@@ -109,7 +116,8 @@ deploy_scripts() {
             sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/downstream-secrets/telegram.env && \
             rm -f /tmp/telegram.env"
         rm -f "$SECRETS_TMP"
-        trap - EXIT
+        # Restore the prior EXIT trap (empty string clears, if none existed).
+        eval "${SECRETS_PREV_TRAP:-trap - EXIT}"
         echo "  Telegram envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: No Telegram credentials in backups/secrets.yaml — alerts disabled"
@@ -441,8 +449,12 @@ SSHEOF'
         MATRIX_SECRETS_TMP=$(mktemp)
         # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
         # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # ConnectTimeout bounds the remote leg (see deploy_scripts note).
+        # Save/restore any pre-existing EXIT trap rather than clearing blindly.
+        local MATRIX_PREV_TRAP
+        MATRIX_PREV_TRAP=$(trap -p EXIT)
         # shellcheck disable=SC2064  # expand MATRIX_SECRETS_TMP now, intentional
-        trap "rm -f '$MATRIX_SECRETS_TMP'; ssh '$REMOTE' 'rm -f /tmp/matrix.env' 2>/dev/null || true" EXIT
+        trap "rm -f '$MATRIX_SECRETS_TMP'; ssh -o ConnectTimeout=5 '$REMOTE' 'rm -f /tmp/matrix.env' 2>/dev/null || true" EXIT
         # Values shell-quoted (printf %q) so an admin token / age recipient
         # with shell-significant bytes survives `source` in backup.sh intact.
         {
@@ -455,7 +467,8 @@ SSHEOF'
             sudo install -m 0640 -o root -g nick /tmp/matrix.env /etc/imagineering-secrets/matrix.env && \
             rm -f /tmp/matrix.env"
         rm -f "$MATRIX_SECRETS_TMP"
-        trap - EXIT
+        # Restore the prior EXIT trap (empty string clears, if none existed).
+        eval "${MATRIX_PREV_TRAP:-trap - EXIT}"
         echo "  Matrix envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: matrix_admin_token not found in $MATRIX_SECRETS — Continuwuity backup disabled"
