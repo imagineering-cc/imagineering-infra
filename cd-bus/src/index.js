@@ -33,7 +33,14 @@ export default {
       if (typeof env.PUBLISH_TOKEN !== "string" || env.PUBLISH_TOKEN.length === 0) {
         return json({ error: "relay misconfigured: PUBLISH_TOKEN is not bound" }, 500);
       }
-      if ((request.headers.get("authorization") || "") !== `Bearer ${env.PUBLISH_TOKEN}`) {
+      // Constant-time compare so a network attacker can't recover the token
+      // byte-by-byte from response timing (Carnot, original cd-bus review).
+      // Coalesce a missing/malformed header to "" and ALWAYS run safeEqual, so
+      // the "no Bearer token" and "wrong token" paths are timing-
+      // indistinguishable. A bare `=== null` short-circuit would skip the HMAC
+      // on the no-header path and leak which case it was (Kelvin + Carnot, PR #77).
+      const pubTok = bearer(request) ?? "";
+      if (!(await safeEqual(pubTok, env.PUBLISH_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
       }
       let event;
@@ -58,6 +65,26 @@ export default {
     // Service names: GHCR-image-name shaped (alnum, dot, underscore, hyphen).
     const m = url.pathname.match(/^\/events\/(.+)$/);
     if (request.method === "GET" && m && SERVICE_RE.test(m[1])) {
+      // Subscribe auth, ENFORCED ONLY WHEN SUBSCRIBE_TOKEN IS BOUND. Deliberate
+      // asymmetry with /publish (which fails closed when its token is unbound):
+      //   - an unauthenticated /publish lets anyone inject deploy events — that
+      //     is dangerous, so it must fail closed;
+      //   - an unauthenticated /events only leaks event metadata (image names,
+      //     shas, deploy cadence — no secrets), which is the CURRENT accepted
+      //     pilot state.
+      // Gating enforcement on the secret being bound is what makes this
+      // deployable WITHOUT a flag-day break: ship the code (unbound → still
+      // public, pilot intact) → teach every subscriber to send the token →
+      // `wrangler secret put SUBSCRIBE_TOKEN` flips enforcement on. See the
+      // "Locking down /events" runbook in README.md.
+      if (typeof env.SUBSCRIBE_TOKEN === "string" && env.SUBSCRIBE_TOKEN.length > 0) {
+        // Coalesce-and-always-compare, same as /publish: a missing header and a
+        // wrong token must be timing-indistinguishable (no `=== null` short-circuit).
+        const subTok = bearer(request) ?? "";
+        if (!(await safeEqual(subTok, env.SUBSCRIBE_TOKEN))) {
+          return json({ error: "unauthorized" }, 401);
+        }
+      }
       const stub = env.BUS.get(env.BUS.idFromName(m[1]));
       // Forward headers so the DO can honor Last-Event-ID on reconnect.
       return stub.fetch(new Request("https://do/subscribe", { headers: request.headers }));
@@ -179,3 +206,40 @@ const json = (obj, status = 200) =>
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+
+// Extract the bearer token from an Authorization header, or null if absent or
+// not a Bearer scheme. The scheme name is matched CASE-INSENSITIVELY (RFC 7235
+// defines auth schemes as case-insensitive); the token itself is returned
+// verbatim. Callers coalesce null to "" and always run safeEqual, so a missing
+// header and a wrong token stay timing-indistinguishable.
+function bearer(request) {
+  const h = request.headers.get("authorization") || "";
+  const m = h.match(/^Bearer +(.*)$/i);
+  return m ? m[1] : null;
+}
+
+// Constant-time string compare. We HMAC BOTH sides under a single per-call
+// random key, then compare the fixed-length (32-byte) digests. This is the
+// portable WebCrypto pattern for Workers (no Node `timingSafeEqual`): HMACing
+// first means the byte loop is always over 32 bytes regardless of the inputs'
+// lengths, so neither the token length nor the position of the first mismatch
+// leaks through timing. A random per-call key makes the digests unpredictable
+// to an attacker who controls one side.
+async function safeEqual(a, b) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    crypto.getRandomValues(new Uint8Array(32)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const [da, db] = await Promise.all([
+    crypto.subtle.sign("HMAC", key, enc(a)),
+    crypto.subtle.sign("HMAC", key, enc(b)),
+  ]);
+  const va = new Uint8Array(da);
+  const vb = new Uint8Array(db);
+  let diff = 0;
+  for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+  return diff === 0;
+}
