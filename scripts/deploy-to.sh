@@ -29,7 +29,7 @@ REMOTE="nick@$IP"
 # consumers, two quoting regimes:
 #
 #   shell_env_line  — for envfiles consumed by bash `source`/`.`
-#                     (e.g. /etc/downstream-secrets/telegram.env via
+#                     (e.g. /etc/imagineering-secrets/telegram.env via
 #                     lib/telegram.sh, /etc/imagineering-secrets/matrix.env
 #                     via backup.sh). Uses printf %q so the line re-evaluates
 #                     to the exact original bytes when sourced.
@@ -78,7 +78,7 @@ deploy_scripts() {
     # /etc/cron.d/* entries (task #21).
     local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
     if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
-        echo "Installing /etc/downstream-secrets/telegram.env..."
+        echo "Installing /etc/imagineering-secrets/telegram.env..."
         local BOT_TOKEN CHAT_ID THREAD_ID
         BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
         CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
@@ -112,8 +112,8 @@ deploy_scripts() {
         } > "$SECRETS_TMP"
         chmod 0600 "$SECRETS_TMP"
         scp -q "$SECRETS_TMP" "$REMOTE":/tmp/telegram.env
-        ssh "$REMOTE" "sudo mkdir -p /etc/downstream-secrets && \
-            sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/downstream-secrets/telegram.env && \
+        ssh "$REMOTE" "sudo mkdir -p /etc/imagineering-secrets && \
+            sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/imagineering-secrets/telegram.env && \
             rm -f /tmp/telegram.env"
         rm -f "$SECRETS_TMP"
         # Restore the prior EXIT trap (empty string clears, if none existed).
@@ -125,7 +125,7 @@ deploy_scripts() {
     fi
 
     # Set up health check cron. Tokens are NOT inlined here any more — the
-    # script reads /etc/downstream-secrets/telegram.env via lib/telegram.sh.
+    # script reads /etc/imagineering-secrets/telegram.env via lib/telegram.sh.
     echo "Installing /etc/cron.d/health-check..."
     ssh "$REMOTE" "mkdir -p ~/logs && printf '%s\n' \
         'SHELL=/bin/bash' \
