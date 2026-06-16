@@ -268,6 +268,27 @@ Boot volume can be resized online — grow partition with `growpart` + `resize2f
 - Instance: `ocid1.instance.oc1.ap-sydney-1.anzxsljr5jyppsicpdt4ecunqcvoxmvhauzsq5co53joaumapptj3ktxoqhq`
 - Boot volume: `ocid1.bootvolume.oc1.ap-sydney-1.abzxsljrvp4mpltca5qqqt3qldbs252qlqp35hr6ydsdvew2ch444zmcqakq`
 
+## DNS
+
+**Cloudflare is the source of truth for `imagineering.cc` DNS.** The domain's
+nameservers are `hattie`/`karl.ns.cloudflare.com`, so all live records are
+served from the Cloudflare zone:
+
+- Zone ID: `1444f67680d10386df2a55e5f016e2b2`
+- Account ID: `fc0bb404a04968a041ca7d8475e2ffad`
+
+**Namecheap is the registrar only** (renewals + NS delegation) — it does **not**
+serve DNS. The old `dns/` Terraform (Namecheap provider, `mode = "OVERWRITE"`)
+was non-authoritative dead config and was **removed** (see git history before
+this commit / the "retire dead dns/" PR). It defined: bare `@` A → server IP,
+wildcard `*` A → server IP, SPF (`v=spf1 include:sendinblue.com ~all`, for Brevo
+email), and DMARC (`v=DMARC1; p=none;`). Those equivalents live in Cloudflare
+now — if you ever need to recreate DNS-as-code, use the Cloudflare provider and
+import the live zone, don't resurrect the Namecheap config.
+
+> Edit DNS via the Cloudflare dashboard or API (zone above). The Namecheap API
+> creds that `dns/secrets.yaml` held are unused after this removal.
+
 ## Secrets Management
 
 Everything is encrypted with SOPS/age. The age key is at the default location: `~/.config/sops/age/keys.txt`
