@@ -598,7 +598,12 @@ DREAMFINDER_API_URL=\(.dreamfinder_api_url // \"\")
 DREAMFINDER_API_KEY=\(.dreamfinder_api_key // \"\")
 LIVEKIT_URL=\(.livekit_url // \"\")
 LIVEKIT_API_KEY=\(.livekit_api_key // \"\")
-LIVEKIT_API_SECRET=\(.livekit_api_secret // \"\")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+LIVEKIT_API_SECRET=\(.livekit_api_secret // \"\")
+DF_BRAIN=\(.df_brain // \"api\")
+TTS_ENGINE=\(.tts_engine // \"kokoro\")
+LYRA_SSH_KEY=\(.lyra_ssh_key // \"\")
+LYRA_SSH_HOST=\(.lyra_ssh_host // \"ubuntu@207.211.145.30\")
+OPENAI_TTS_VOICE=\(.openai_tts_voice // \"sage\")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
