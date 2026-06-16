@@ -138,6 +138,71 @@ else
     skip_or_fail "yq unavailable"
 fi
 
+# --- 3b. Generator code-path round-trip ------------------------------------
+# Sections [1]-[3] test the helpers in isolation. This section proves the
+# ACTUAL pattern the deploy_* .env generators now use end-to-end:
+#
+#     field() { echo "$PLAINTEXT" | yq -r '.key // ""'; }
+#     printf 'KEY=%s\n' "$(dotenv_quote "$(field '.key')")"
+#
+# i.e. the adversarial value passes through a real `yq -r '.key // ""'`
+# extraction (as if freshly decrypted by sops) AND `dotenv_quote`, then through
+# docker compose's dotenv parser — the same composition deploy_outline /
+# deploy_claudius / deploy_matrix / etc. run in production. A regression in
+# either the yq extraction or the quoting would surface here.
+echo "[3b] generator code-path round-trip (yq extract -> dotenv_quote -> compose)"
+if command -v yq >/dev/null 2>&1; then
+    # Emulate a decrypted secrets.yaml. yq -o=json/-r reads scalar values back
+    # verbatim, so we build the doc with yq itself to guarantee the stored value
+    # is exactly $ADV (no hand-rolled YAML escaping to get wrong).
+    GEN_PLAINTEXT=$(ADV_ENV="$ADV" yq -n '.adversarial_secret = strenv(ADV_ENV)')
+    # The exact extraction helper the generators define.
+    gen_field() { echo "$GEN_PLAINTEXT" | yq -r "$1 // \"\""; }
+    EXTRACTED=$(gen_field '.adversarial_secret')
+    if [ "$EXTRACTED" = "$ADV" ]; then
+        ok "yq extraction (.key // \"\") preserves the value"
+    else
+        bad "yq extraction altered the value"; printf '    exp: %q\n    got: %q\n' "$ADV" "$EXTRACTED"
+    fi
+
+    printf 'GENVAL=%s\n' "$(dotenv_quote "$EXTRACTED")" > "$WORK/gen.env"
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        cat > "$WORK/gen-compose.yml" <<'YML'
+services:
+  t:
+    image: alpine
+    environment:
+      GENVAL: ${GENVAL}
+YML
+        if (cd "$WORK" && docker compose --env-file gen.env -f gen-compose.yml run --rm -T t sh -c 'printf "%s" "$GENVAL"' 2>/dev/null) > "$WORK/gen-got.bin"; then
+            (cd "$WORK" && docker compose -f gen-compose.yml down >/dev/null 2>&1 || true)
+            if cmp -s "$WORK/gen-got.bin" <(printf '%s' "$ADV"); then
+                ok "generator path container value matches original"
+            else
+                bad "generator path container value differs"
+            fi
+        else
+            skip_or_fail "docker present but 'compose run' failed; structural check only"
+            if grep -q '^GENVAL=".*"$' "$WORK/gen.env"; then ok "generator dotenv line well-formed"; else bad "generator dotenv line malformed"; fi
+        fi
+    else
+        skip_or_fail "docker unavailable; structural check only"
+        line=$(cat "$WORK/gen.env"); body=${line#GENVAL=}
+        if [ "${body:0:1}" = '"' ] && [ "${body: -1}" = '"' ]; then
+            inner=${body:1:${#body}-2}
+            if printf '%s' "$inner" | grep -qP '(?<!\\)"'; then
+                bad "generator dotenv inner body has an unescaped double-quote"
+            else
+                ok "generator dotenv line is well-formed double-quoted"
+            fi
+        else
+            bad "generator dotenv value is not double-quoted"
+        fi
+    fi
+else
+    skip_or_fail "yq unavailable; cannot exercise generator extraction path"
+fi
+
 # --- 4. Drift guard: the helpers must still exist in deploy-to.sh -----------
 echo "[4] deploy-to.sh still defines the helpers"
 DEPLOY="$(cd "$(dirname "$0")" && pwd)/deploy-to.sh"
