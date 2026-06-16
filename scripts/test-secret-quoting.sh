@@ -1,0 +1,142 @@
+#!/bin/bash
+# Round-trip tests for the secret-quoting helpers in deploy-to.sh.
+#
+# Each generated config file in deploy-to.sh interpolates decrypted secrets.
+# These tests prove an adversarial value — containing every byte that is
+# significant to one of the consumers (" $ # & / \ backtick, whitespace, and a
+# newline) — survives the quote -> write -> parse round-trip byte-for-byte.
+#
+# Three consumers, three checks:
+#   1. bash `source`            (shell_env_line / printf %q)
+#   2. docker compose dotenv    (dotenv_quote)
+#   3. yq YAML scalar           (yq strenv templating, used for livekit.yaml)
+#
+# The dotenv check uses `docker compose` when available (authoritative, reads
+# the value the container actually receives). When docker is absent (e.g. CI),
+# it falls back to a yamllint-free structural assertion that the line is a
+# well-formed double-quoted dotenv value. Shell and yq checks need no docker.
+#
+# Exit non-zero on any mismatch so CI fails loudly.
+
+set -euo pipefail
+
+# --- The helpers under test (kept byte-identical to deploy-to.sh) -----------
+# If these drift from deploy-to.sh the tests are meaningless, so they are
+# duplicated deliberately and a guard below greps deploy-to.sh to confirm the
+# function names still exist there.
+
+shell_env_line() {
+    printf '%s=%q\n' "$1" "$2"
+}
+
+dotenv_quote() {
+    local v=$1
+    v=${v//\\/\\\\}
+    v=${v//\"/\\\"}
+    v=${v//\$/\\\$}
+    v=${v//$'\n'/\\n}
+    printf '"%s"' "$v"
+}
+
+# --- Adversarial fixture ----------------------------------------------------
+# Every byte here is significant to at least one consumer.
+ADV=$'a"b$c#d&e/f\\g`h i: literal\nsecond-line*x'
+
+PASS=0
+FAIL=0
+ok()   { echo "  ok   - $1"; PASS=$((PASS + 1)); }
+bad()  { echo "  FAIL - $1"; FAIL=$((FAIL + 1)); }
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# --- 1. Shell-source round-trip --------------------------------------------
+echo "[1] bash source round-trip (shell_env_line / printf %q)"
+shell_env_line SECRET "$ADV" > "$WORK/shell.env"
+# Source in a clean subshell and compare exact bytes.
+# shellcheck disable=SC1091  # runtime-generated path, nothing to follow
+GOT=$(set -e; . "$WORK/shell.env"; printf '%s' "$SECRET")
+if [ "$GOT" = "$ADV" ]; then ok "sourced value matches original"; else
+    bad "sourced value differs"; printf '    exp: %q\n    got: %q\n' "$ADV" "$GOT"
+fi
+
+# --- 2. dotenv round-trip ---------------------------------------------------
+echo "[2] docker compose dotenv round-trip (dotenv_quote)"
+printf 'VAL=%s\n' "$(dotenv_quote "$ADV")" > "$WORK/.env"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    cat > "$WORK/docker-compose.yml" <<'YML'
+services:
+  t:
+    image: alpine
+    environment:
+      VAL: ${VAL}
+YML
+    # Authoritative: run the container and read the raw bytes it receives.
+    if (cd "$WORK" && docker compose run --rm -T t sh -c 'printf "%s" "$VAL"' 2>/dev/null) > "$WORK/got.bin"; then
+        (cd "$WORK" && docker compose down >/dev/null 2>&1 || true)
+        if cmp -s "$WORK/got.bin" <(printf '%s' "$ADV"); then
+            ok "container runtime value matches original"
+        else
+            bad "container runtime value differs"
+        fi
+    else
+        echo "  skip - docker present but 'compose run' failed (no daemon?); doing structural check"
+        # Structural fallback.
+        if grep -q '^VAL=".*"$' "$WORK/.env"; then
+            ok "dotenv line is well-formed double-quoted"
+        else
+            bad "dotenv line malformed"
+        fi
+    fi
+else
+    echo "  skip - docker unavailable; structural check only"
+    # Without docker we can still assert the quoting is well-formed: the value
+    # is wrapped in double quotes and contains no UNescaped " inside.
+    line=$(cat "$WORK/.env")
+    body=${line#VAL=}
+    if [ "${body:0:1}" = '"' ] && [ "${body: -1}" = '"' ]; then
+        inner=${body:1:${#body}-2}
+        # No bare (unescaped) double-quote should remain in the inner body.
+        if printf '%s' "$inner" | grep -qP '(?<!\\)"'; then
+            bad "dotenv inner body has an unescaped double-quote"
+        else
+            ok "dotenv line is well-formed double-quoted"
+        fi
+    else
+        bad "dotenv value is not double-quoted"
+    fi
+fi
+
+# --- 3. yq YAML round-trip (livekit templating) ----------------------------
+echo "[3] yq strenv YAML round-trip"
+if command -v yq >/dev/null 2>&1; then
+    cat > "$WORK/livekit.yaml" <<'YML'
+keys:
+  LIVEKIT_API_KEY: LIVEKIT_API_SECRET
+rtc:
+  use_external_ip: true
+YML
+    LK_KEY="key-${ADV}" LK_SECRET="$ADV" yq eval '
+        .keys = {} |
+        .keys[strenv(LK_KEY)] = strenv(LK_SECRET)
+    ' "$WORK/livekit.yaml" > "$WORK/livekit-gen.yaml"
+    GOT_SECRET=$(yq -r '.keys.[]' "$WORK/livekit-gen.yaml")
+    GOT_KEY=$(yq -r '.keys | keys | .[0]' "$WORK/livekit-gen.yaml")
+    if [ "$GOT_SECRET" = "$ADV" ]; then ok "yq secret value round-trips"; else bad "yq secret differs"; fi
+    if [ "$GOT_KEY" = "key-${ADV}" ]; then ok "yq key name round-trips"; else bad "yq key differs"; fi
+else
+    echo "  skip - yq unavailable"
+fi
+
+# --- 4. Drift guard: the helpers must still exist in deploy-to.sh -----------
+echo "[4] deploy-to.sh still defines the helpers"
+DEPLOY="$(cd "$(dirname "$0")" && pwd)/deploy-to.sh"
+for fn in shell_env_line dotenv_quote; do
+    if grep -qE "^${fn}\(\) \{" "$DEPLOY"; then ok "$fn defined in deploy-to.sh"; else
+        bad "$fn missing from deploy-to.sh (tests would be stale)"
+    fi
+done
+
+echo ""
+echo "secret-quoting tests: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]

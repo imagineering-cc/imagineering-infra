@@ -20,6 +20,48 @@ SERVICE=${2:-all}
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE="nick@$IP"
 
+# ---------------------------------------------------------------------------
+# Secret-safe value quoting helpers (defense-in-depth).
+#
+# Generated config files interpolate decrypted secrets. A secret containing
+# shell- or YAML-significant bytes (quotes, $, #, &, /, \, whitespace,
+# newlines) must not corrupt the file or inject into the consumer. Two
+# consumers, two quoting regimes:
+#
+#   shell_env_line  — for envfiles consumed by bash `source`/`.`
+#                     (e.g. /etc/downstream-secrets/telegram.env via
+#                     lib/telegram.sh, /etc/imagineering-secrets/matrix.env
+#                     via backup.sh). Uses printf %q so the line re-evaluates
+#                     to the exact original bytes when sourced.
+#
+#   dotenv_quote    — for `.env` files consumed by docker compose's compose-go
+#                     dotenv parser. Wraps in double quotes and escapes the
+#                     four bytes that parser treats specially inside a
+#                     double-quoted value: \  "  $  and a literal newline.
+#                     Verified to round-trip to the actual container runtime.
+#
+# Both verified byte-exact against an adversarial value containing
+# `" $ # & / \` backtick, whitespace and a newline (see scripts/test-secret-quoting.sh).
+# ---------------------------------------------------------------------------
+
+# Emit a `KEY=<quoted-value>` line safe for a bash-sourced envfile.
+# Usage: shell_env_line KEY "$value"  -> prints the full line (no trailing newline added by caller's printf needed)
+shell_env_line() {
+    # %q renders the value in a form that bash re-reads as the identical bytes.
+    printf '%s=%q\n' "$1" "$2"
+}
+
+# Quote a single value for a docker-compose dotenv file (double-quoted form).
+# Usage: dotenv_quote "$value"  -> prints `"...escaped..."`
+dotenv_quote() {
+    local v=$1
+    v=${v//\\/\\\\}      # backslash first: \  -> \\
+    v=${v//\"/\\\"}      # "  -> \"
+    v=${v//\$/\\\$}      # $  -> \$   (suppress compose variable interpolation)
+    v=${v//$'\n'/\\n}    # literal newline -> \n escape
+    printf '"%s"' "$v"
+}
+
 echo "Deploying to $REMOTE..."
 
 deploy_scripts() {
@@ -46,13 +88,19 @@ deploy_scripts() {
         # ~/.bash_history or `ps` output.
         local SECRETS_TMP
         SECRETS_TMP=$(mktemp)
+        # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
+        # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # shellcheck disable=SC2064  # expand SECRETS_TMP now, intentional
+        trap "rm -f '$SECRETS_TMP'; ssh '$REMOTE' 'rm -f /tmp/telegram.env' 2>/dev/null || true" EXIT
         # Strip null/empty values so the envfile is clean (e.g. THREAD_ID
-        # is optional and may legitimately be missing).
+        # is optional and may legitimately be missing). Values are shell-quoted
+        # (printf %q via shell_env_line) so a token with shell-significant bytes
+        # survives `source` intact and cannot inject.
         {
-            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BOT_TOKEN"
-            printf 'TELEGRAM_CHAT_ID=%s\n'   "$CHAT_ID"
+            shell_env_line TELEGRAM_BOT_TOKEN "$BOT_TOKEN"
+            shell_env_line TELEGRAM_CHAT_ID   "$CHAT_ID"
             if [ -n "$THREAD_ID" ] && [ "$THREAD_ID" != "null" ]; then
-                printf 'TELEGRAM_THREAD_ID=%s\n' "$THREAD_ID"
+                shell_env_line TELEGRAM_THREAD_ID "$THREAD_ID"
             fi
         } > "$SECRETS_TMP"
         chmod 0600 "$SECRETS_TMP"
@@ -61,6 +109,7 @@ deploy_scripts() {
             sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/downstream-secrets/telegram.env && \
             rm -f /tmp/telegram.env"
         rm -f "$SECRETS_TMP"
+        trap - EXIT
         echo "  Telegram envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: No Telegram credentials in backups/secrets.yaml — alerts disabled"
@@ -167,22 +216,28 @@ deploy_contact() {
     fi
 
     # Generate .env from encrypted secrets. Decrypt once into a variable so we
-    # can run two yq passes without re-decrypting (and without echoing plaintext).
+    # can read each field without re-decrypting (and without echoing plaintext).
+    # Each value goes through dotenv_quote so a secret with dotenv-significant
+    # bytes (", $, \, newline) round-trips through docker compose intact rather
+    # than corrupting the file or triggering variable interpolation.
     echo "Generating .env from encrypted secrets..."
     local CONTACT_PLAINTEXT
     CONTACT_PLAINTEXT=$(sops -d "$CONTACT_SECRETS")
-    echo "$CONTACT_PLAINTEXT" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/imagineering-contact-us/.env"
-    # Turnstile secret appended in a separate pass: yq string-interpolation can't
-    # embed the `// ""` empty-string default (the nested quotes break parsing),
-    # so coalesce here. Empty when the key is absent => verification stays off.
-    echo "TURNSTILE_SECRET=$(echo "$CONTACT_PLAINTEXT" | yq -r '.turnstile_secret // ""')" \
-        >> "$REPO_ROOT/imagineering-contact-us/.env"
+    # Read a field from the decrypted YAML; missing keys yq-print as "null",
+    # which we map to empty so absent => empty value (matches prior behavior
+    # for turnstile_secret, and is harmless for the required SMTP fields).
+    contact_field() { echo "$CONTACT_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Contact Form Configuration (auto-generated from secrets.yaml)"
+        printf 'SMTP_HOST=%s\n'        "$(dotenv_quote "$(contact_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'        "$(dotenv_quote "$(contact_field '.smtp_port')")"
+        printf 'SMTP_USERNAME=%s\n'    "$(dotenv_quote "$(contact_field '.smtp_username')")"
+        printf 'SMTP_PASSWORD=%s\n'    "$(dotenv_quote "$(contact_field '.smtp_password')")"
+        printf 'SMTP_FROM_EMAIL=%s\n'  "$(dotenv_quote "$(contact_field '.smtp_from_email')")"
+        printf 'CONTACT_TO=%s\n'       "$(dotenv_quote "$(contact_field '.contact_to')")"
+        # Empty when the key is absent => Turnstile verification stays off.
+        printf 'TURNSTILE_SECRET=%s\n' "$(dotenv_quote "$(contact_field '.turnstile_secret')")"
+    } > "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/imagineering-contact-us"
@@ -384,9 +439,15 @@ SSHEOF'
         fi
         local MATRIX_SECRETS_TMP
         MATRIX_SECRETS_TMP=$(mktemp)
+        # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
+        # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # shellcheck disable=SC2064  # expand MATRIX_SECRETS_TMP now, intentional
+        trap "rm -f '$MATRIX_SECRETS_TMP'; ssh '$REMOTE' 'rm -f /tmp/matrix.env' 2>/dev/null || true" EXIT
+        # Values shell-quoted (printf %q) so an admin token / age recipient
+        # with shell-significant bytes survives `source` in backup.sh intact.
         {
-            printf 'MATRIX_ADMIN_TOKEN=%s\n' "$ADMIN_TOKEN"
-            printf 'AGE_RECIPIENT=%s\n'      "$AGE_RECIPIENT"
+            shell_env_line MATRIX_ADMIN_TOKEN "$ADMIN_TOKEN"
+            shell_env_line AGE_RECIPIENT      "$AGE_RECIPIENT"
         } > "$MATRIX_SECRETS_TMP"
         chmod 0600 "$MATRIX_SECRETS_TMP"
         scp -q "$MATRIX_SECRETS_TMP" "$REMOTE":/tmp/matrix.env
@@ -394,6 +455,7 @@ SSHEOF'
             sudo install -m 0640 -o root -g nick /tmp/matrix.env /etc/imagineering-secrets/matrix.env && \
             rm -f /tmp/matrix.env"
         rm -f "$MATRIX_SECRETS_TMP"
+        trap - EXIT
         echo "  Matrix envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: matrix_admin_token not found in $MATRIX_SECRETS — Continuwuity backup disabled"
@@ -663,15 +725,25 @@ deploy_livekit() {
     API_SECRET=$(sops -d "$LK_SECRETS" | yq -r '.livekit_api_secret')
     EXTERNAL_IP=$(sops -d "$LK_SECRETS" | yq -r '.external_ip')
 
-    # Generate livekit.yaml with real credentials and IP
-    sed -e "s/LIVEKIT_API_KEY/$API_KEY/" \
-        -e "s/LIVEKIT_API_SECRET/$API_SECRET/" \
-        "$REPO_ROOT/livekit/livekit.yaml" > "$REPO_ROOT/livekit/livekit-generated.yaml"
+    # Generate livekit.yaml with real credentials and IP.
+    #
+    # Use yq strenv templating, NOT sed: a secret containing sed-significant
+    # bytes (/, &, \) or YAML-significant bytes (:, #, ", newline) would corrupt
+    # the config or inject YAML under the old `sed s/PLACEHOLDER/$secret/`
+    # approach. strenv reads the value from the environment (never the command
+    # line, so it can't leak via `ps`/history) and yq emits it as a properly
+    # quoted YAML scalar. The template `keys:` map has exactly one placeholder
+    # entry (LIVEKIT_API_KEY: LIVEKIT_API_SECRET); we replace the whole map with
+    # the real key->secret pair, and set rtc.node_ip when an external IP is given.
+    LK_KEY="$API_KEY" LK_SECRET="$API_SECRET" yq eval '
+        .keys = {} |
+        .keys[strenv(LK_KEY)] = strenv(LK_SECRET)
+    ' "$REPO_ROOT/livekit/livekit.yaml" > "$REPO_ROOT/livekit/livekit-generated.yaml"
 
     # Inject node_ip if external IP is set
     if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
-        sed -i'' -e "/use_external_ip: true/a\\
-  node_ip: $EXTERNAL_IP" "$REPO_ROOT/livekit/livekit-generated.yaml"
+        LK_IP="$EXTERNAL_IP" yq eval -i '.rtc.node_ip = strenv(LK_IP)' \
+            "$REPO_ROOT/livekit/livekit-generated.yaml"
     fi
 
     # Deploy files
