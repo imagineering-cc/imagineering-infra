@@ -3,9 +3,36 @@
   // subscribers over SSE. See cd-bus/README.md and the design doc:
   // https://outline.imagineering.cc/doc/the-imagineering-deploy-bus-qz9QscpP6Q
   "name": "cd-bus",
+  // The imagineering Cloudflare account (Nick's token can see >1 account, so
+  // pin it explicitly — otherwise `wrangler deploy` fails in non-interactive
+  // mode). Matches the zone account in the root CLAUDE.md.
+  "account_id": "fc0bb404a04968a041ca7d8475e2ffad",
   "main": "src/index.js",
   "compatibility_date": "2025-05-01",
   "observability": { "enabled": true },
+
+  // Keep the *.workers.dev route LIVE alongside the custom domain. The live
+  // downstream pilot still subscribes via the workers.dev URL; omitting this
+  // makes `wrangler deploy` disable workers.dev by default and 1042 the live
+  // SSE leg. Retire this (drop to false) only AFTER every subscriber's
+  // BUS_URL has moved to cd-bus.imagineering.cc.
+  "workers_dev": true,
+  // No per-version preview URLs — they're ephemeral public endpoints we don't
+  // need for a relay, and minimizing internet-facing surface is the point of
+  // the hardening pass.
+  "preview_urls": false,
+
+  // Custom domain (replaces the *.workers.dev host). Declared here so the
+  // binding is reproducible: `wrangler deploy` provisions the proxied DNS
+  // record + edge cert for this hostname in the imagineering.cc zone
+  // (1444f67680d10386df2a55e5f016e2b2) and routes it to this Worker. The
+  // specific `cd-bus` record overrides the zone's wildcard A record.
+  // NOTE: adding a custom domain alone is NOT non-breaking — `wrangler deploy`
+  // disables workers.dev unless `workers_dev: true` is set above (it is). Both
+  // must be declared together to add the domain without dropping the live leg.
+  "routes": [
+    { "pattern": "cd-bus.imagineering.cc", "custom_domain": true }
+  ],
 
   // One Durable Object instance per service holds that service's open SSE
   // connections and its last-published event (for replay on reconnect).
