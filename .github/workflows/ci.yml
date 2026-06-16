@@ -43,5 +43,10 @@ jobs:
 
       # ubuntu-latest ships docker + yq, so the dotenv check runs against the
       # real container runtime and the yq check against real mikefarah yq.
+      # REQUIRE_ALL=1 turns a missing tool into a hard failure rather than a
+      # vacuous skip, so a future runner-image change that drops yq/docker
+      # fails loudly instead of passing green with the checks silently skipped.
       - name: Run secret-quoting round-trip tests
+        env:
+          REQUIRE_ALL: "1"
         run: ./scripts/test-secret-quoting.sh
