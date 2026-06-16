@@ -1,7 +1,7 @@
 #!/bin/bash
 # Server health check - sends Telegram alerts when thresholds are exceeded.
 # Runs hourly via cron. Telegram credentials are loaded from
-# /etc/downstream-secrets/telegram.env by the shared helper below — they are
+# /etc/imagineering-secrets/telegram.env by the shared helper below — they are
 # no longer inlined into the cron entry (avoids leaking the bot token in a
 # world-readable /etc/cron.d/ file).
 
