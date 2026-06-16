@@ -33,12 +33,14 @@ export default {
       if (typeof env.PUBLISH_TOKEN !== "string" || env.PUBLISH_TOKEN.length === 0) {
         return json({ error: "relay misconfigured: PUBLISH_TOKEN is not bound" }, 500);
       }
-      const pubTok = bearer(request);
       // Constant-time compare so a network attacker can't recover the token
-      // byte-by-byte from response timing (Carnot, PR review). bearer() returns
-      // null for a missing/malformed header; safeEqual still runs to keep the
-      // unauthorized path's timing uniform.
-      if (pubTok === null || !(await safeEqual(pubTok, env.PUBLISH_TOKEN))) {
+      // byte-by-byte from response timing (Carnot, original cd-bus review).
+      // Coalesce a missing/malformed header to "" and ALWAYS run safeEqual, so
+      // the "no Bearer token" and "wrong token" paths are timing-
+      // indistinguishable. A bare `=== null` short-circuit would skip the HMAC
+      // on the no-header path and leak which case it was (Kelvin + Carnot, PR #77).
+      const pubTok = bearer(request) ?? "";
+      if (!(await safeEqual(pubTok, env.PUBLISH_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
       }
       let event;
@@ -76,8 +78,10 @@ export default {
       // `wrangler secret put SUBSCRIBE_TOKEN` flips enforcement on. See the
       // "Locking down /events" runbook in README.md.
       if (typeof env.SUBSCRIBE_TOKEN === "string" && env.SUBSCRIBE_TOKEN.length > 0) {
-        const subTok = bearer(request);
-        if (subTok === null || !(await safeEqual(subTok, env.SUBSCRIBE_TOKEN))) {
+        // Coalesce-and-always-compare, same as /publish: a missing header and a
+        // wrong token must be timing-indistinguishable (no `=== null` short-circuit).
+        const subTok = bearer(request) ?? "";
+        if (!(await safeEqual(subTok, env.SUBSCRIBE_TOKEN))) {
           return json({ error: "unauthorized" }, 401);
         }
       }
@@ -204,11 +208,14 @@ const json = (obj, status = 200) =>
   });
 
 // Extract the bearer token from an Authorization header, or null if absent or
-// not a Bearer scheme. Returning null (rather than "") lets callers treat a
-// missing header and a wrong token uniformly — both go through safeEqual.
+// not a Bearer scheme. The scheme name is matched CASE-INSENSITIVELY (RFC 7235
+// defines auth schemes as case-insensitive); the token itself is returned
+// verbatim. Callers coalesce null to "" and always run safeEqual, so a missing
+// header and a wrong token stay timing-indistinguishable.
 function bearer(request) {
   const h = request.headers.get("authorization") || "";
-  return h.startsWith("Bearer ") ? h.slice(7) : null;
+  const m = h.match(/^Bearer +(.*)$/i);
+  return m ? m[1] : null;
 }
 
 // Constant-time string compare. We HMAC BOTH sides under a single per-call

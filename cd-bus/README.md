@@ -23,10 +23,12 @@ the position of the first mismatch leaks through response timing.
 
 **Why the auth asymmetry** (`/publish` fails closed when unbound, `/events`
 falls open): an unauthenticated `/publish` would let anyone inject deploy events
-— dangerous, so it must fail closed (500). An unauthenticated `/events` only
-leaks event metadata (image names, shas, deploy cadence — no secrets), which is
-the current accepted pilot state. Gating `/events` enforcement on the secret
-being bound is what lets the lock-down deploy without a flag-day break.
+— dangerous, so it must fail closed (500). An unauthenticated `/events` leaks no
+*credentials*, but it does expose operational intelligence (image names, shas,
+deploy cadence) that is worth protecting — treat public-read as a **temporary
+pilot exposure to be closed by the lock-down runbook**, not as harmless. Gating
+`/events` enforcement on the secret being bound is what lets that lock-down
+deploy without a flag-day break.
 
 One **Durable Object instance per service** (`idFromName(service)`) holds that
 service's open SSE connections and its last-published event. The retained event
