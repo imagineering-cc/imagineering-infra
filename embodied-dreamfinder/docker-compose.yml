@@ -29,6 +29,15 @@ services:
       - PORT=3000
       - VOICE_MODE=${VOICE_MODE:-realtime}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # lyra-live brain: route the voice LLM stage to the REAL Lyra container on
+      # robins-oci via ssh+docker exec. Dark by default (api); set DF_BRAIN=lyra-live
+      # in .env to activate, with TTS_ENGINE=openai for her 'sage' voice. The ssh
+      # hop uses the mounted deploy key (authorized on robins-oci, restricted to
+      # this host's IP). See embodied-lyra task #3.
+      - DF_BRAIN=${DF_BRAIN:-api}
+      - LYRA_SSH_HOST=${LYRA_SSH_HOST:-ubuntu@207.211.145.30}
+      - LYRA_SSH_KEY=${LYRA_SSH_KEY:-}
+      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-sage}
       - WHISPER_CLI=/opt/whisper/bin/whisper-cli
       - WHISPER_MODEL=/opt/whisper/models/ggml-base.en.bin
       - PIPER_BIN=/opt/piper/piper
@@ -46,6 +55,9 @@ services:
       - /home/nick/whisper.cpp/models:/opt/whisper/models:ro
       - /home/nick/piper:/opt/piper:ro
       - /home/nick/kokoro:/opt/kokoro:ro
+      # Deploy key for the lyra-live ssh hop (read-only). Inert unless
+      # DF_BRAIN=lyra-live + LYRA_SSH_KEY=/app/.ssh/lyra-deploy are set.
+      - /home/nick/.ssh/lyra-deploy:/app/.ssh/lyra-deploy:ro
 
 # Shared network allows voice brain to reach text brain (dreamfinder:8081)
 networks:
