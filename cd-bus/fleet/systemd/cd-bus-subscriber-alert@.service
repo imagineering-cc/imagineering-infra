@@ -1,0 +1,16 @@
+# Telegram alert for a failed cd-bus-subscriber@<svc> — FLEET TEMPLATE.
+# Triggered via OnFailure= (see the subscriber's onfailure.conf drop-in) when
+# the subscriber enters `failed`. The SSE leg being down is not a deploy
+# outage (poll backstop still converges) but it must be VISIBLE — the
+# dead-deployer class that hid for 13 days (claude-tasks #168).
+# Install at /etc/systemd/system/cd-bus-subscriber-alert@.service
+[Unit]
+Description=Telegram alert for cd-bus-subscriber@%i failure
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+
+[Service]
+Type=oneshot
+# Runs as nick: the shared /opt/scripts/lib/telegram.sh reads the bot token
+# from /etc/imagineering-secrets/telegram.env (root:nick 0640), readable by nick.
+User=nick
+ExecStart=/opt/cd-bus/subscriber-alert.sh %i

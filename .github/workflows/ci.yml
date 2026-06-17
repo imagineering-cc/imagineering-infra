@@ -20,6 +20,15 @@ jobs:
           additional_files: '.githooks/pre-commit'
           severity: warning
 
+      # The deploy-bus fleet template (cd-bus/fleet/) ships its own shell
+      # scripts; scandir above only covers ./scripts, so lint cd-bus/ too —
+      # otherwise "Shell Linting" would be green while not covering them.
+      - name: Run ShellCheck (cd-bus)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: './cd-bus'
+          severity: warning
+
   yaml-lint:
     name: YAML Linting
     runs-on: ubuntu-latest
