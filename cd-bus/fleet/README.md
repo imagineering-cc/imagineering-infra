@@ -37,6 +37,8 @@ All legs run the **same** `deploy.sh` under a **per-service flock**: legs of one
 
 ## One-time host setup
 
+**Prerequisites** (the units assume these): a `nick` group/user (units run as `User=nick`), and the shared Telegram helper at `/opt/scripts/lib/telegram.sh` (installed by imagineering-infra's `deploy_scripts` — without it the OnFailure *alerts* can't send, though deploys still work). `install-shared.sh` warns if either is missing.
+
 ```bash
 scp -r cd-bus/fleet nick@HOST:/tmp/cd-bus-fleet
 ssh HOST 'cd /tmp/cd-bus-fleet && sudo ./install-shared.sh'

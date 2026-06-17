@@ -70,10 +70,15 @@ seen_at_start=$(cat "$STATE" 2>/dev/null || true)
 [ -n "$seen_at_start" ] && hdr=(-H "Last-Event-ID: $seen_at_start")
 
 # Subscribe auth (claude-tasks #20): pass the bearer via a 0600 header FILE
-# (curl -H @file), NEVER a -H "Bearer ..." ARG — an arg is world-readable in
-# the process table (ps -ef, /proc/<pid>/cmdline), which on a multi-tenant host
-# leaks the token to other service users. The file is removed on exit. No-op
-# while SUBSCRIBE_TOKEN is empty (relay /events still public, header omitted).
+# (curl -H @file), NEVER a -H "Bearer ..." ARG. The guarantee this gives, stated
+# precisely (cage-match #83, Carnot): the token VALUE never appears in the
+# process table (ps -ef, /proc/<pid>/cmdline) — only the file PATH does, and the
+# file is mode 0600 owned by the run user, so a DIFFERENT-UID service on a
+# multi-tenant host cannot read it. It does NOT defend against a same-UID
+# process (which can read the path then the file) — but that threat is already
+# moot, since such a process can read /etc/cd-bus/common.env (root:nick 0640)
+# where the same token lives. The file is removed on exit. No-op while
+# SUBSCRIBE_TOKEN is empty (relay /events still public, header omitted).
 hdrfile=""
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() { [ -n "$hdrfile" ] && rm -f "$hdrfile"; }

@@ -9,12 +9,18 @@
 #   scp -r cd-bus/fleet nick@host:/tmp/cd-bus-fleet && \
 #     ssh host 'cd /tmp/cd-bus-fleet && sudo ./install-shared.sh'
 set -euo pipefail
+shopt -s nullglob # so an (unexpected) empty .d dir globs to nothing, not a literal '*'
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPT=/opt/cd-bus
 UNITS=/etc/systemd/system
 
 [ "$(id -u)" -eq 0 ] || { echo "must run as root (installs to $UNITS)"; exit 1; }
+# Host prerequisites the units assume (cage-match #83): the alert scripts source
+# the shared Telegram helper, and the unit files run as group nick. Warn rather
+# than fail — install the scripts/units regardless, but make a missing prereq loud.
+getent group nick >/dev/null || echo "WARN: group 'nick' not found — the units run as User=nick; create it or edit the units."
+[ -f /opt/scripts/lib/telegram.sh ] || echo "WARN: /opt/scripts/lib/telegram.sh missing — failure ALERTS will not send until imagineering-infra's deploy_scripts installs it."
 
 echo "installing shared scripts -> $OPT"
 install -d -o root -g root -m 0755 "$OPT"

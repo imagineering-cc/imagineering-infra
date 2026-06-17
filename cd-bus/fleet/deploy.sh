@@ -26,6 +26,12 @@ APP_DIR="${APP_DIR:-/home/nick/apps/$SVC}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-$SVC}"
 FAIL_STATE="$APP_DIR/.cd-poll-failcount"
 
+# A missing APP_DIR is a config error (typo'd /etc/cd-bus/<svc>.env, dir not
+# created yet), never transient — and `cd` failing under `set -e` would exit 1,
+# which the poll unit's SuccessExitStatus=0 1 SWALLOWS as success: no deploy, no
+# counter, no alert (the silent dead-deployer class, #168). Exit 2 instead so it
+# alerts immediately. (cage-match #83, Maxwell.)
+[ -d "$APP_DIR" ] || { echo "APP_DIR '$APP_DIR' for $SVC does not exist — config error" >&2; exit 2; }
 cd "$APP_DIR"
 # Lock so a slow pull cannot overlap the next timer tick or an SSE event.
 # Per-service lock file: legs of the SAME service serialise; different services
