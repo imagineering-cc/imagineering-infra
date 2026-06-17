@@ -1,0 +1,25 @@
+# Drives cd-bus-recover@%i.service ~every 10 min — FLEET TEMPLATE (claude-tasks #736).
+# Enable per service: `systemctl enable --now cd-bus-recover@dreamfinder.timer`.
+#
+# Cadence: the subscriber takes ~5 min of fast-failing reconnects to trip its
+# start-limit and reach `failed`. A ~10 min recovery poll revives a dead SSE leg
+# within ~10 min — well inside the window the 5-min poll backstop covers — and a
+# still-broken relay re-alerts on a bounded ~15 min cadence rather than going
+# permanently silent.
+#
+# Not Persistent=: a missed tick during downtime has no value — after a reboot
+# the subscriber starts fresh (not `failed`), so a caught-up tick would only no-op.
+# Install at /etc/systemd/system/cd-bus-recover@.timer
+[Unit]
+Description=Periodic auto-recovery check for cd-bus-subscriber@%i
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+
+[Timer]
+# First check 5 min after boot (let the subscriber come up and, if the relay is
+# down, actually reach `failed`), then every 10 min.
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

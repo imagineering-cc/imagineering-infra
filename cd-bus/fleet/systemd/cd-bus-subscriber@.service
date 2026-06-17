@@ -1,0 +1,36 @@
+# Deploy-bus SSE subscriber — FLEET TEMPLATE (claude-tasks #714).
+# `%i` is the service name, e.g. `systemctl enable --now cd-bus-subscriber@dreamfinder`.
+# Install at /etc/systemd/system/cd-bus-subscriber@.service
+#
+# Failure semantics, tuned to the leg's importance: losing SSE only degrades
+# deploy latency to the 5-min poll floor, so a sub-minute relay blip must NOT
+# page. RestartSec=30 + StartLimitBurst=10 / 600s means the unit only reaches
+# `failed` (LOUD — the OnFailure drop-in alerts) after ~5 min of continuously
+# failing to make progress, i.e. once degradation has lasted ~a poll interval.
+# An occasional stream drop just reconnects 30s later; the relay's retained-
+# event replay covers anything missed. The companion cd-bus-recover@.timer
+# revives a `failed` unit so it can never die permanently silent.
+[Unit]
+Description=Deploy-bus SSE subscriber for %i
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+User=nick
+# Shared config first (BUS_URL, the relay SUBSCRIBE_TOKEN that gates every
+# /events channel), then per-service overrides (APP_DIR, COMPOSE_SERVICE, ...).
+# Both optional (leading `-`): absent => the script's defaults + public-pilot.
+EnvironmentFile=-/etc/cd-bus/common.env
+EnvironmentFile=-/etc/cd-bus/%i.env
+ExecStart=/opt/cd-bus/subscribe.sh %i
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

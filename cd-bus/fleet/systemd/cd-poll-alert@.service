@@ -1,0 +1,14 @@
+# Telegram alert for a failed cd-poll@<svc> — FLEET TEMPLATE.
+# Triggered via OnFailure= (see cd-poll@.service.d/onfailure.conf) when the
+# pull leg really fails (deploy.sh exit 2 after >=3 consecutive failures, or
+# unit-level breakage). Unlike the SSE leg, a failed pull leg DOES mean deploys
+# are not landing — both legs run the same action.
+# Install at /etc/systemd/system/cd-poll-alert@.service
+[Unit]
+Description=Telegram alert for cd-poll@%i failure
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+
+[Service]
+Type=oneshot
+User=nick
+ExecStart=/opt/cd-bus/poll-alert.sh %i

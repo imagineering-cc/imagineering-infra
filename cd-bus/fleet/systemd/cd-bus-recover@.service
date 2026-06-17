@@ -1,0 +1,34 @@
+# Auto-recovery for a deploy-bus SSE subscriber — FLEET TEMPLATE (claude-tasks #736).
+#
+# WHY. The recycle-as-success behaviour makes the subscriber exit 0 on a healthy
+# Worker connection recycle, so systemd's start-limit is the ONLY path to
+# `failed`. A sustained relay outage trips that limit after ~5 min of
+# fast-failing reconnects; the unit enters `failed` and — because the limit is
+# hit — systemd will NOT auto-restart it. It stays dead until reset-failed.
+# Meanwhile the poll backstop keeps deploys flowing, so nobody would notice the
+# fast leg is silently gone.
+#
+# WHAT. A oneshot, fired ~every 10 min by the companion @.timer, that revives the
+# subscriber ONLY if it is `failed`. On a healthy unit the is-failed guard
+# short-circuits to a no-op. Does not silence alerting — BOUNDS its cadence:
+# sustained outage re-alerts roughly every ~15 min instead of going permanently
+# silent or spamming on every reconnect.
+#
+# STATELESS: reads live `systemctl is-failed` each tick — no state file that
+# could rot the watchdog into a permanent no-op.
+#
+# PRIVILEGE: reset-failed/start on a system unit require root, so (unlike the
+# User=nick alert units) this runs as root.
+# Install at /etc/systemd/system/cd-bus-recover@.service
+[Unit]
+Description=Auto-recover a failed cd-bus-subscriber@%i (bounded re-alert, no permanent death)
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+
+[Service]
+Type=oneshot
+# Guard then act: is-failed exits 0 only when the unit is `failed`, so reset+start
+# runs solely in that case. The trailing `|| true` keeps THIS unit out of its own
+# `failed` state (no OnFailure, no recursion) — a failed attempt just retries next tick.
+ExecStart=/bin/bash -c 'systemctl is-failed --quiet cd-bus-subscriber@%i.service && { echo "cd-bus-subscriber@%i is failed — clearing start-limit and restarting"; systemctl reset-failed cd-bus-subscriber@%i.service && systemctl start cd-bus-subscriber@%i.service; } || true'
+StandardOutput=journal
+StandardError=journal
