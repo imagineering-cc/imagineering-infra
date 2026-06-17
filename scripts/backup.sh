@@ -43,7 +43,7 @@ error() {
 }
 
 # Source shared Telegram helper (defines send_telegram_alert + loads creds
-# from /etc/downstream-secrets/telegram.env at deploy targets).
+# from /etc/imagineering-secrets/telegram.env at deploy targets).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/telegram.sh
 . "$SCRIPT_DIR/lib/telegram.sh"

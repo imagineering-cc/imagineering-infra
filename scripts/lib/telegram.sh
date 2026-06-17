@@ -7,7 +7,7 @@
 #
 # Configuration: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID
 # (the last is optional). If not already in the environment, this lib tries
-# to source /etc/downstream-secrets/telegram.env (root:nick 0640) so the
+# to source /etc/imagineering-secrets/telegram.env (root:nick 0640) so the
 # token never has to be inlined into world-readable cron entries.
 #
 # Silent no-op if creds are missing — a missing-secret deploy shouldn't turn
@@ -22,9 +22,9 @@
 # Source the secrets file if present and the vars aren't already set.
 # Done at source-time, not at function-call-time, so each script only pays
 # the cost once (and behavior is predictable in `set -u` consumers).
-if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && [ -r /etc/downstream-secrets/telegram.env ]; then
+if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && [ -r /etc/imagineering-secrets/telegram.env ]; then
   # shellcheck disable=SC1091
-  . /etc/downstream-secrets/telegram.env
+  . /etc/imagineering-secrets/telegram.env
 fi
 
 # Default exports so consumers can use `${VAR:-}` or `set -u` safely.
