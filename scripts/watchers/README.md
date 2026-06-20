@@ -286,6 +286,10 @@ watcher logs and skips that cycle — it never crashes cron.
 
 ### Install on Sydney
 
+This watcher depends ONLY on `watcher-base.sh` (it inlines its one needed
+helper, `html_escape`, rather than sourcing `lib/diagnose.sh`), so the install
+footprint is just the lib + the script.
+
 ```bash
 # 1. Lib + script (lib likely already present from other watchers).
 scp scripts/watchers/lib/watcher-base.sh 149.118.69.221:/tmp/   # if not already there
@@ -296,16 +300,23 @@ ssh 149.118.69.221 'sudo install -m 0755 -o ubuntu -g ubuntu /tmp/email-health-w
 # 2. Install the Brevo credential file (mode 0600, mirrors notify-credentials).
 #    The key lives in notify/secrets.yaml under brevo_api_key. Build the
 #    envfile locally and scp it — do NOT echo the key over an interactive ssh
-#    (it lands in shell history / logs).
+#    (it lands in shell history / logs). Abort if the key is empty/null so we
+#    never install a credential file that silently makes the watcher skip.
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
 umask 077
-printf 'BREVO_API_KEY=%s\n' "$(sops -d notify/secrets.yaml | yq -r '.brevo_api_key')" > /tmp/brevo-credentials
+BREVO_KEY=$(sops -d notify/secrets.yaml | yq -r '.brevo_api_key')
+[ -n "$BREVO_KEY" ] && [ "$BREVO_KEY" != "null" ] || { echo "ERROR: brevo_api_key empty/null — aborting"; exit 1; }
+printf 'BREVO_API_KEY=%s\n' "$BREVO_KEY" > /tmp/brevo-credentials
 scp /tmp/brevo-credentials 149.118.69.221:/tmp/
-ssh 149.118.69.221 'install -m 0600 /tmp/brevo-credentials ~/.config/imagineering/brevo-credentials && rm -f /tmp/brevo-credentials'
-rm -f /tmp/brevo-credentials
+# mkdir the config dir first — watcher-base.sh creates it at runtime, but the
+# credfile is installed BEFORE the first run, so it must exist now.
+ssh 149.118.69.221 'mkdir -p ~/.config/imagineering && install -m 0600 /tmp/brevo-credentials ~/.config/imagineering/brevo-credentials && rm -f /tmp/brevo-credentials'
+rm -f /tmp/brevo-credentials; unset BREVO_KEY
 
-# 3. Install the cron entry (every 4 hours, off the hour). Tag MUST match CRON_TAG.
-ssh 149.118.69.221 'crontab -l | { cat; echo "23 */4 * * * /home/ubuntu/email-health-watch.sh  # email-health-watch"; } | crontab -'
+# 3. Install the cron entry (every 4 hours, off the hour). Tag MUST match
+#    CRON_TAG. Idempotent: strips any existing email-health-watch line first so
+#    re-running this step never creates duplicate entries / duplicate alerts.
+ssh 149.118.69.221 'crontab -l 2>/dev/null | grep -vF "# email-health-watch" | { cat; echo "23 */4 * * * /home/ubuntu/email-health-watch.sh  # email-health-watch"; } | crontab -'
 
 # 4. Confirm first cycle (force a run, watch the log).
 ssh 149.118.69.221 '/home/ubuntu/email-health-watch.sh; tail ~/email-health-watch.log'

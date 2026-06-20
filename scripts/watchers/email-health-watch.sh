@@ -18,7 +18,8 @@
 #
 # THREE CHECKS (alert on any failing):
 #   1. DOMAIN AUTH  — GET /v3/senders/domains: each required domain must be
-#                     present with authenticated:true AND verified:false→fail.
+#                     present with authenticated:true AND verified:true; any
+#                     domain missing / not-authenticated / not-verified fails.
 #                     THIS is the check that would have caught the incident.
 #   2. DAILY VOLUME — GET /v3/smtp/statistics/aggregatedReport?days=1 .requests
 #                     vs the daily cap. Alert at >= WARN_PCT% of CAP — early
@@ -52,11 +53,17 @@ __lib="$(dirname "$0")/lib/watcher-base.sh"
 source "$__lib"
 unset __lib
 
-__diag="$(dirname "$0")/lib/diagnose.sh"
-[[ -r "$__diag" ]] || __diag="$HOME/lib/diagnose.sh"
-# shellcheck disable=SC1090
-source "$__diag"
-unset __diag
+# NOTE: we deliberately do NOT source lib/diagnose.sh. This watcher needs only
+# one helper from it (html_escape), so inlining it below keeps the install
+# footprint to watcher-base.sh + this file — sourcing diagnose.sh unconditionally
+# would otherwise crash at startup (set -e) on any host that doesn't have it.
+html_escape() {
+    local s="$1"
+    s="${s//&/&amp;}"
+    s="${s//</&lt;}"
+    s="${s//>/&gt;}"
+    printf '%s' "$s"
+}
 
 # --- Configuration (env-tunable) -------------------------------------------
 BREVO_API="${BREVO_API:-https://api.brevo.com/v3}"
