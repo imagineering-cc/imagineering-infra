@@ -1,0 +1,27 @@
+# docker-compose.lyra.yml — OVERRIDE applied ONLY in lyra-live mode.
+#
+# Why this file exists (cage-match #81, finding 1): the lyra-live brain reaches
+# the real Lyra container on robins-oci over ssh, using a deploy key. Mounting
+# that key into the base compose meant it was present in the container on EVERY
+# deploy, including the default DF_BRAIN=api path where the ssh hop never runs.
+# `:ro` stops mutation, not exfiltration — under a container compromise the key
+# was readable even though the lyra path was dark. Pulling the mount into this
+# override keeps the key out of the container unless lyra-live is actually on.
+#
+# Applied automatically by scripts/deploy-to.sh when the generated DF_BRAIN is
+# `lyra-live`. Manual equivalent:
+#   docker compose -f docker-compose.yml -f docker-compose.lyra.yml up -d
+#
+# Still outstanding (cage-match #81, finding 2 — tracked separately, cross-repo):
+# the consuming code in embodied-dreamfinder uses StrictHostKeyChecking=no +
+# UserKnownHostsFile=/dev/null for this ssh hop. Once that's fixed to verify the
+# server identity, add a pinned known_hosts mount here:
+#   - /home/nick/.ssh/lyra-known_hosts:/app/.ssh/known_hosts:ro
+# (not mounted yet — a bind-mount of a non-existent path would create an empty
+# dir, and the JS doesn't consume it until the cross-repo fix lands.)
+services:
+  app:
+    volumes:
+      # Deploy key for the lyra-live ssh hop (read-only). Present ONLY when this
+      # override is applied — i.e. only in lyra-live mode.
+      - /home/nick/.ssh/lyra-deploy:/app/.ssh/lyra-deploy:ro

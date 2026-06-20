@@ -38,13 +38,16 @@ services:
       - BRIDGE_BOT_IDS=${BRIDGE_BOT_IDS:-@whatsappbot:imagineering.cc,@signalbot:imagineering.cc,@telegrambot:imagineering.cc,@discordbot:imagineering.cc}
       # River's per-platform bridge management rooms — each one configured
       # adds that platform to start_private_chat's enum (dreamfinder#103:
-      # config presence IS platform existence). Signal/Discord stay unset
-      # until their bridge logins exist (Signal: SIM re-registration;
-      # Discord: account creation — both Nick's hands).
+      # config presence IS platform existence). River has its own bridge
+      # login on WhatsApp, Telegram and Signal (Signal linked 2026-06-12 as a
+      # device of the +61461488770 account — River absorbs that identity; the
+      # human-vs-AI distinction lives in a per-message emoji prefix 🤖/🧑, not
+      # a separate account). Discord stays unset until River has its own
+      # Discord account (river@imagineering.cc — Nick's hands).
       - WHATSAPP_MANAGEMENT_ROOM=${WHATSAPP_MANAGEMENT_ROOM:-!JUo0oTBHrPUJOq76WrqjAO3Ioc6rbT4cOujGUPxJPc4}
       - TELEGRAM_MANAGEMENT_ROOM=${TELEGRAM_MANAGEMENT_ROOM:-!xJfXtfQlhHWzgxxTaxRVFcCp6BDjikWjysvB4xrxGyU}
       # SIGNAL parked dark 2026-06-12: River's login linked + room ready
-      # (!N5PcCDLZSPgkkHNAU05ZFa_WCjcSoij2QMD6-0olOyc) but two bugs block delivery -
+      # (!N5PcCDLZSPgkkHNAU05ZFa_WCjcSoij2QMD6-0olOyc) but two bugs block delivery —
       # (1) start_private_chat sends UNPREFIXED `start-chat`, which mautrix-signal
       # rejects (needs `!signal ` prefix); (2) River's signal login fails contact
       # discovery ("websocket is nil"). Re-enable only after both are fixed +
