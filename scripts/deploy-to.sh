@@ -748,6 +748,19 @@ deploy_embodied_dreamfinder() {
         printf 'OPENAI_TTS_VOICE=%s\n'      "$(dotenv_quote "$(edf_field '.openai_tts_voice' 'sage')")"
     } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
+    # Compose-file selection: only apply the lyra-live override (which mounts the
+    # ssh deploy key into the container) when the brain is actually lyra-live, so
+    # the default api path never carries the key (cage-match #81 finding 1).
+    local DF_BRAIN_VAL EDF_COMPOSE_ARGS
+    DF_BRAIN_VAL=$(edf_field '.df_brain' 'api')
+    if [ "$DF_BRAIN_VAL" = "lyra-live" ]; then
+        EDF_COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.lyra.yml"
+        echo "DF_BRAIN=lyra-live -> applying docker-compose.lyra.yml (mounts ssh deploy key)"
+    else
+        EDF_COMPOSE_ARGS="-f docker-compose.yml"
+        echo "DF_BRAIN=$DF_BRAIN_VAL -> base compose only (no ssh key mounted)"
+    fi
+
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
 
@@ -763,8 +776,8 @@ deploy_embodied_dreamfinder() {
     # Ensure shared network exists (allows voice brain to reach text brain)
     ssh "$REMOTE" "docker network inspect imagineering >/dev/null 2>&1 || docker network create imagineering"
 
-    # Build and start
-    ssh "$REMOTE" "cd ~/apps/embodied-dreamfinder && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
+    # Build and start (override applied only in lyra-live mode — see above)
+    ssh "$REMOTE" "cd ~/apps/embodied-dreamfinder && DOCKER_BUILDKIT=1 docker compose $EDF_COMPOSE_ARGS build --pull && docker compose $EDF_COMPOSE_ARGS up -d"
 
     echo "Embodied Dreamfinder deployed!"
     echo "  URL: https://df.imagineering.cc"
