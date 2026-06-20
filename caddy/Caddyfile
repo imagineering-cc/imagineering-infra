@@ -176,20 +176,23 @@ world.imagineering.cc {
         reverse_proxy localhost:3015
     }
 
-    # --- Cache-busting layer 2 (per tech_world PR #476) ---
-    # The Flutter bundle (`main.dart.js`) is wrapped by `flutter_bootstrap.js`,
-    # which we stamp with a per-build `?v=<sha>` query string at deploy time.
-    # The query string forces browsers to re-fetch on every redeploy IF they
-    # actually request the new HTML. These headers ensure they do:
-    #   - `/` and `/index.html`: always revalidate, never serve a cached HTML
-    #     that points at a stale bootstrap.
-    #   - `/flutter_bootstrap.js`: never cached so the latest `?v=<sha>` query
-    #     in the HTML always lands on a fresh fetch.
-    # Hashed/static assets (`main.dart.js`, fonts, images) keep Caddy's
-    # default ETag-based behavior — they're large and rarely change between
-    # deploys for the same SHA.
+    # --- Cache-busting (per tech_world PR #476, extended in #15) ---
+    # pwa-strategy=none → NO service worker, so HTTP caching is the only layer.
+    # Flutter's entrypoint artifacts (main.dart.js/.mjs/.wasm, flutter.js) and
+    # the asset manifests have STABLE filenames whose CONTENT changes every
+    # deploy — they are NOT content-hashed. So they must always revalidate
+    # (ETag → 304 when unchanged → cached bytes reused; 200 only on real change).
+    #   - #476 originally no-cached only `/`, `/index.html`, `/flutter_bootstrap.js`
+    #     and wrongly assumed `main.dart.js` was "hashed/static". This is a --wasm
+    #     build: the actual app code is `main.dart.wasm`, which fell through to
+    #     heuristic caching → a Refresh re-fetched fresh HTML+bootstrap but a STALE
+    #     wasm, so "Refresh does nothing". #15 adds the entrypoints + manifests.
+    # NOTE: `no-cache` ≠ `no-store` — the 5.5MB wasm stays cached; only a cheap
+    # conditional revalidation is added. Genuinely versioned/immutable assets
+    # (/canvaskit/*, fonts, images) intentionally keep default caching below.
+    # When adding a new stable-named per-build artifact, add it here too.
     @html_or_loader {
-        path / /index.html /flutter_bootstrap.js
+        path / /index.html /flutter_bootstrap.js /flutter.js /main.dart.js /main.dart.mjs /main.dart.wasm /assets/AssetManifest.bin /assets/AssetManifest.bin.json /assets/FontManifest.json /version.json
     }
     header @html_or_loader Cache-Control "no-cache, must-revalidate"
 
