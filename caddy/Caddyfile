@@ -76,6 +76,12 @@ df.imagineering.cc {
     reverse_proxy localhost:3015
 }
 
+# Lyra's live Q&A — same embodied-dreamfinder app; the app detects the "lyra."
+# host and serves her persona, voice, and own face (no ?lyra param needed).
+lyra.imagineering.cc {
+    reverse_proxy localhost:3015
+}
+
 # --- LiveKit SFU (self-hosted WebRTC) ---
 # Signaling endpoint — WebSocket upgrade required for LiveKit clients/agents
 
