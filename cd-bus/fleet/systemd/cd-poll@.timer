@@ -1,0 +1,17 @@
+# Triggers the CD pull backstop every 5 min — FLEET TEMPLATE.
+# Enable per service: `systemctl enable --now cd-poll@dreamfinder.timer`.
+# Install at /etc/systemd/system/cd-poll@.timer
+[Unit]
+Description=Trigger deploy-bus CD pull for %i every 5 min
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+
+[Timer]
+# First tick 2 min after boot (let Docker settle), then every 5 min.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=10s
+# Catch up a missed deploy after host downtime (bounded so it can't stampede).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

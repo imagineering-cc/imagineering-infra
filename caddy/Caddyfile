@@ -57,6 +57,13 @@ imagineering.cc {
     }
 }
 
+# --- Mautrix Galaxy (standalone three.js teaching world, shareable) ---
+
+galaxy.imagineering.cc {
+    root * /srv/galaxy
+    file_server
+}
+
 # --- Invite page (QR slide for meetups + shareable join URL) ---
 
 invite.imagineering.cc {

@@ -11,7 +11,7 @@ export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ -z "$1" ]; then
   echo "Usage: $0 <ip> [service]"
   echo "  ip: VPS IP address or hostname"
-  echo "  service: all|caddy|site|invite|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
+  echo "  service: all|caddy|site|invite|galaxy|outline|kanbn|radicale|matrix|claudius|imagineering-contact-us|backups|scripts (default: all)"
   exit 1
 fi
 
@@ -19,6 +19,48 @@ IP=$1
 SERVICE=${2:-all}
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE="nick@$IP"
+
+# ---------------------------------------------------------------------------
+# Secret-safe value quoting helpers (defense-in-depth).
+#
+# Generated config files interpolate decrypted secrets. A secret containing
+# shell- or YAML-significant bytes (quotes, $, #, &, /, \, whitespace,
+# newlines) must not corrupt the file or inject into the consumer. Two
+# consumers, two quoting regimes:
+#
+#   shell_env_line  — for envfiles consumed by bash `source`/`.`
+#                     (e.g. /etc/imagineering-secrets/telegram.env via
+#                     lib/telegram.sh, /etc/imagineering-secrets/matrix.env
+#                     via backup.sh). Uses printf %q so the line re-evaluates
+#                     to the exact original bytes when sourced.
+#
+#   dotenv_quote    — for `.env` files consumed by docker compose's compose-go
+#                     dotenv parser. Wraps in double quotes and escapes the
+#                     four bytes that parser treats specially inside a
+#                     double-quoted value: \  "  $  and a literal newline.
+#                     Verified to round-trip to the actual container runtime.
+#
+# Both verified byte-exact against an adversarial value containing
+# `" $ # & / \` backtick, whitespace and a newline (see scripts/test-secret-quoting.sh).
+# ---------------------------------------------------------------------------
+
+# Emit a `KEY=<quoted-value>` line safe for a bash-sourced envfile.
+# Usage: shell_env_line KEY "$value"  -> prints the full line (no trailing newline added by caller's printf needed)
+shell_env_line() {
+    # %q renders the value in a form that bash re-reads as the identical bytes.
+    printf '%s=%q\n' "$1" "$2"
+}
+
+# Quote a single value for a docker-compose dotenv file (double-quoted form).
+# Usage: dotenv_quote "$value"  -> prints `"...escaped..."`
+dotenv_quote() {
+    local v=$1
+    v=${v//\\/\\\\}      # backslash first: \  -> \\
+    v=${v//\"/\\\"}      # "  -> \"
+    v=${v//\$/\\\$}      # $  -> \$   (suppress compose variable interpolation)
+    v=${v//$'\n'/\\n}    # literal newline -> \n escape
+    printf '"%s"' "$v"
+}
 
 echo "Deploying to $REMOTE..."
 
@@ -36,7 +78,7 @@ deploy_scripts() {
     # /etc/cron.d/* entries (task #21).
     local BACKUP_SECRETS="$REPO_ROOT/backups/secrets.yaml"
     if [ -f "$BACKUP_SECRETS" ] && sops -d "$BACKUP_SECRETS" | yq -e '.telegram_bot_token' > /dev/null 2>&1; then
-        echo "Installing /etc/downstream-secrets/telegram.env..."
+        echo "Installing /etc/imagineering-secrets/telegram.env..."
         local BOT_TOKEN CHAT_ID THREAD_ID
         BOT_TOKEN=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_bot_token')
         CHAT_ID=$(sops -d "$BACKUP_SECRETS" | yq -r '.telegram_chat_id')
@@ -46,21 +88,36 @@ deploy_scripts() {
         # ~/.bash_history or `ps` output.
         local SECRETS_TMP
         SECRETS_TMP=$(mktemp)
+        # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
+        # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # ConnectTimeout bounds the remote leg: the abort case is often an
+        # unreachable host, and the trap must not hang ~120s on a dead TCP
+        # connect. Save any pre-existing EXIT trap and restore it on success
+        # rather than clearing unconditionally, so an outer trap (none today)
+        # would survive.
+        local SECRETS_PREV_TRAP
+        SECRETS_PREV_TRAP=$(trap -p EXIT)
+        # shellcheck disable=SC2064  # expand SECRETS_TMP now, intentional
+        trap "rm -f '$SECRETS_TMP'; ssh -o ConnectTimeout=5 '$REMOTE' 'rm -f /tmp/telegram.env' 2>/dev/null || true" EXIT
         # Strip null/empty values so the envfile is clean (e.g. THREAD_ID
-        # is optional and may legitimately be missing).
+        # is optional and may legitimately be missing). Values are shell-quoted
+        # (printf %q via shell_env_line) so a token with shell-significant bytes
+        # survives `source` intact and cannot inject.
         {
-            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BOT_TOKEN"
-            printf 'TELEGRAM_CHAT_ID=%s\n'   "$CHAT_ID"
+            shell_env_line TELEGRAM_BOT_TOKEN "$BOT_TOKEN"
+            shell_env_line TELEGRAM_CHAT_ID   "$CHAT_ID"
             if [ -n "$THREAD_ID" ] && [ "$THREAD_ID" != "null" ]; then
-                printf 'TELEGRAM_THREAD_ID=%s\n' "$THREAD_ID"
+                shell_env_line TELEGRAM_THREAD_ID "$THREAD_ID"
             fi
         } > "$SECRETS_TMP"
         chmod 0600 "$SECRETS_TMP"
         scp -q "$SECRETS_TMP" "$REMOTE":/tmp/telegram.env
-        ssh "$REMOTE" "sudo mkdir -p /etc/downstream-secrets && \
-            sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/downstream-secrets/telegram.env && \
+        ssh "$REMOTE" "sudo mkdir -p /etc/imagineering-secrets && \
+            sudo install -m 0640 -o root -g nick /tmp/telegram.env /etc/imagineering-secrets/telegram.env && \
             rm -f /tmp/telegram.env"
         rm -f "$SECRETS_TMP"
+        # Restore the prior EXIT trap (empty string clears, if none existed).
+        eval "${SECRETS_PREV_TRAP:-trap - EXIT}"
         echo "  Telegram envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: No Telegram credentials in backups/secrets.yaml — alerts disabled"
@@ -68,7 +125,7 @@ deploy_scripts() {
     fi
 
     # Set up health check cron. Tokens are NOT inlined here any more — the
-    # script reads /etc/downstream-secrets/telegram.env via lib/telegram.sh.
+    # script reads /etc/imagineering-secrets/telegram.env via lib/telegram.sh.
     echo "Installing /etc/cron.d/health-check..."
     ssh "$REMOTE" "mkdir -p ~/logs && printf '%s\n' \
         'SHELL=/bin/bash' \
@@ -131,6 +188,29 @@ deploy_invite() {
     echo "Invite deployed to ~/apps/invite (mounted into Caddy as /srv/invite)"
 }
 
+deploy_galaxy() {
+    # Mautrix Galaxy — a standalone three.js teaching world (spherical gravity,
+    # planets = bridge platforms) served at galaxy.imagineering.cc. Self-contained
+    # single HTML file; the only runtime dependency is three.js from a CDN.
+    # Source lives in this repo (galaxy/index.html), recovered from the retired
+    # Bridgekeeper's Primer game so it can be shared on its own.
+    #
+    # Destination is ~/apps/galaxy — the Caddy container bind-mounts
+    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml),
+    # same convention as the invite mount.
+    local GALAXY_SRC="$REPO_ROOT/galaxy"
+
+    if [ ! -f "$GALAXY_SRC/index.html" ]; then
+        echo "ERROR: galaxy/index.html not found at $GALAXY_SRC"
+        return 1
+    fi
+
+    echo "Deploying galaxy.imagineering.cc..."
+    ssh "$REMOTE" "mkdir -p ~/apps/galaxy"
+    rsync -avz --delete "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
+    echo "Galaxy deployed to ~/apps/galaxy (mounted into Caddy as /srv/galaxy)"
+}
+
 deploy_contact() {
     echo "Deploying imagineering-contact-us..."
 
@@ -144,22 +224,28 @@ deploy_contact() {
     fi
 
     # Generate .env from encrypted secrets. Decrypt once into a variable so we
-    # can run two yq passes without re-decrypting (and without echoing plaintext).
+    # can read each field without re-decrypting (and without echoing plaintext).
+    # Each value goes through dotenv_quote so a secret with dotenv-significant
+    # bytes (", $, \, newline) round-trips through docker compose intact rather
+    # than corrupting the file or triggering variable interpolation.
     echo "Generating .env from encrypted secrets..."
     local CONTACT_PLAINTEXT
     CONTACT_PLAINTEXT=$(sops -d "$CONTACT_SECRETS")
-    echo "$CONTACT_PLAINTEXT" | yq -r '"# Contact Form Configuration (auto-generated from secrets.yaml)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-CONTACT_TO=\(.contact_to)"' > "$REPO_ROOT/imagineering-contact-us/.env"
-    # Turnstile secret appended in a separate pass: yq string-interpolation can't
-    # embed the `// ""` empty-string default (the nested quotes break parsing),
-    # so coalesce here. Empty when the key is absent => verification stays off.
-    echo "TURNSTILE_SECRET=$(echo "$CONTACT_PLAINTEXT" | yq -r '.turnstile_secret // ""')" \
-        >> "$REPO_ROOT/imagineering-contact-us/.env"
+    # Read a field from the decrypted YAML; missing keys yq-print as "null",
+    # which we map to empty so absent => empty value (matches prior behavior
+    # for turnstile_secret, and is harmless for the required SMTP fields).
+    contact_field() { echo "$CONTACT_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Contact Form Configuration (auto-generated from secrets.yaml)"
+        printf 'SMTP_HOST=%s\n'        "$(dotenv_quote "$(contact_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'        "$(dotenv_quote "$(contact_field '.smtp_port')")"
+        printf 'SMTP_USERNAME=%s\n'    "$(dotenv_quote "$(contact_field '.smtp_username')")"
+        printf 'SMTP_PASSWORD=%s\n'    "$(dotenv_quote "$(contact_field '.smtp_password')")"
+        printf 'SMTP_FROM_EMAIL=%s\n'  "$(dotenv_quote "$(contact_field '.smtp_from_email')")"
+        printf 'CONTACT_TO=%s\n'       "$(dotenv_quote "$(contact_field '.contact_to')")"
+        # Empty when the key is absent => Turnstile verification stays off.
+        printf 'TURNSTILE_SECRET=%s\n' "$(dotenv_quote "$(contact_field '.turnstile_secret')")"
+    } > "$REPO_ROOT/imagineering-contact-us/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/imagineering-contact-us"
@@ -200,10 +286,18 @@ deploy_notify() {
         return 1
     fi
 
+    # Decrypt once, then route every value through dotenv_quote so a secret with
+    # dotenv-significant bytes survives docker compose's dotenv parser intact
+    # (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$NOTIFY_SECRETS" | yq -r '"TELEGRAM_BOT_TOKEN=\(.telegram_bot_token)
-TELEGRAM_CHAT_ID=\(.telegram_chat_id)
-NOTIFY_API_KEY=\(.notify_api_key)"' > "$REPO_ROOT/notify/.env"
+    local NOTIFY_PLAINTEXT
+    NOTIFY_PLAINTEXT=$(sops -d "$NOTIFY_SECRETS")
+    notify_field() { echo "$NOTIFY_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        printf 'TELEGRAM_BOT_TOKEN=%s\n' "$(dotenv_quote "$(notify_field '.telegram_bot_token')")"
+        printf 'TELEGRAM_CHAT_ID=%s\n'   "$(dotenv_quote "$(notify_field '.telegram_chat_id')")"
+        printf 'NOTIFY_API_KEY=%s\n'     "$(dotenv_quote "$(notify_field '.notify_api_key')")"
+    } > "$REPO_ROOT/notify/.env"
 
     ssh "$REMOTE" "mkdir -p ~/apps/notify"
     rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/notify/" "$REMOTE":~/apps/notify/
@@ -236,12 +330,19 @@ deploy_familiars_server() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$FAM_SECRETS" | yq -r '"# familiars-server Configuration (auto-generated from secrets.yaml)
-FIREBASE_PROJECT_ID=\(.firebase_project_id)
-FIREBASE_SERVICE_ACCOUNT_BASE64=\(.firebase_service_account_base64)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)"' > "$REPO_ROOT/familiars-server/.env"
+    local FAM_PLAINTEXT
+    FAM_PLAINTEXT=$(sops -d "$FAM_SECRETS")
+    fam_field() { echo "$FAM_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# familiars-server Configuration (auto-generated from secrets.yaml)"
+        printf 'FIREBASE_PROJECT_ID=%s\n'             "$(dotenv_quote "$(fam_field '.firebase_project_id')")"
+        printf 'FIREBASE_SERVICE_ACCOUNT_BASE64=%s\n' "$(dotenv_quote "$(fam_field '.firebase_service_account_base64')")"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'         "$(dotenv_quote "$(fam_field '.claude_code_oauth_token')")"
+    } > "$REPO_ROOT/familiars-server/.env"
 
     # Deploy compose + .env
     ssh "$REMOTE" "mkdir -p ~/apps/familiars-server/source ~/apps/familiars-server/data"
@@ -361,9 +462,19 @@ SSHEOF'
         fi
         local MATRIX_SECRETS_TMP
         MATRIX_SECRETS_TMP=$(mktemp)
+        # Clean up the 0600 plaintext temp file on ANY exit (incl. set -e
+        # aborts mid-scp/ssh) — locally and best-effort on the remote /tmp.
+        # ConnectTimeout bounds the remote leg (see deploy_scripts note).
+        # Save/restore any pre-existing EXIT trap rather than clearing blindly.
+        local MATRIX_PREV_TRAP
+        MATRIX_PREV_TRAP=$(trap -p EXIT)
+        # shellcheck disable=SC2064  # expand MATRIX_SECRETS_TMP now, intentional
+        trap "rm -f '$MATRIX_SECRETS_TMP'; ssh -o ConnectTimeout=5 '$REMOTE' 'rm -f /tmp/matrix.env' 2>/dev/null || true" EXIT
+        # Values shell-quoted (printf %q) so an admin token / age recipient
+        # with shell-significant bytes survives `source` in backup.sh intact.
         {
-            printf 'MATRIX_ADMIN_TOKEN=%s\n' "$ADMIN_TOKEN"
-            printf 'AGE_RECIPIENT=%s\n'      "$AGE_RECIPIENT"
+            shell_env_line MATRIX_ADMIN_TOKEN "$ADMIN_TOKEN"
+            shell_env_line AGE_RECIPIENT      "$AGE_RECIPIENT"
         } > "$MATRIX_SECRETS_TMP"
         chmod 0600 "$MATRIX_SECRETS_TMP"
         scp -q "$MATRIX_SECRETS_TMP" "$REMOTE":/tmp/matrix.env
@@ -371,6 +482,8 @@ SSHEOF'
             sudo install -m 0640 -o root -g nick /tmp/matrix.env /etc/imagineering-secrets/matrix.env && \
             rm -f /tmp/matrix.env"
         rm -f "$MATRIX_SECRETS_TMP"
+        # Restore the prior EXIT trap (empty string clears, if none existed).
+        eval "${MATRIX_PREV_TRAP:-trap - EXIT}"
         echo "  Matrix envfile installed (mode 0640 root:nick)"
     else
         echo "NOTE: matrix_admin_token not found in $MATRIX_SECRETS — Continuwuity backup disabled"
@@ -401,30 +514,39 @@ deploy_outline() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once into a variable so we
+    # can read each field without re-decrypting, and route every value through
+    # dotenv_quote so a secret with dotenv-significant bytes (", $, \, newline)
+    # round-trips through docker compose intact rather than corrupting the file
+    # or triggering variable interpolation.
     echo "Generating .env from encrypted secrets..."
-    sops -d "$OUTLINE_SECRETS" | yq -r '"# Outline Configuration (auto-generated from secrets.yaml)
-OUTLINE_URL=\(.outline_url)
-
-# Generated secrets
-SECRET_KEY=\(.secret_key)
-UTILS_SECRET=\(.utils_secret)
-
-# Postgres
-POSTGRES_PASSWORD=\(.postgres_password)
-
-# MinIO (S3-compatible storage)
-MINIO_ROOT_USER=\(.minio_root_user)
-MINIO_ROOT_PASSWORD=\(.minio_root_password)
-MINIO_URL=\(.minio_url)
-
-# SMTP
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-SMTP_SECURE=\(.smtp_secure)"' > "$REPO_ROOT/outline/.env"
+    local OUTLINE_PLAINTEXT
+    OUTLINE_PLAINTEXT=$(sops -d "$OUTLINE_SECRETS")
+    outline_field() { echo "$OUTLINE_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Outline Configuration (auto-generated from secrets.yaml)"
+        printf 'OUTLINE_URL=%s\n'         "$(dotenv_quote "$(outline_field '.outline_url')")"
+        echo ""
+        echo "# Generated secrets"
+        printf 'SECRET_KEY=%s\n'          "$(dotenv_quote "$(outline_field '.secret_key')")"
+        printf 'UTILS_SECRET=%s\n'        "$(dotenv_quote "$(outline_field '.utils_secret')")"
+        echo ""
+        echo "# Postgres"
+        printf 'POSTGRES_PASSWORD=%s\n'   "$(dotenv_quote "$(outline_field '.postgres_password')")"
+        echo ""
+        echo "# MinIO (S3-compatible storage)"
+        printf 'MINIO_ROOT_USER=%s\n'     "$(dotenv_quote "$(outline_field '.minio_root_user')")"
+        printf 'MINIO_ROOT_PASSWORD=%s\n' "$(dotenv_quote "$(outline_field '.minio_root_password')")"
+        printf 'MINIO_URL=%s\n'           "$(dotenv_quote "$(outline_field '.minio_url')")"
+        echo ""
+        echo "# SMTP"
+        printf 'SMTP_HOST=%s\n'           "$(dotenv_quote "$(outline_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'           "$(dotenv_quote "$(outline_field '.smtp_port')")"
+        printf 'SMTP_USERNAME=%s\n'       "$(dotenv_quote "$(outline_field '.smtp_username')")"
+        printf 'SMTP_PASSWORD=%s\n'       "$(dotenv_quote "$(outline_field '.smtp_password')")"
+        printf 'SMTP_FROM_EMAIL=%s\n'     "$(dotenv_quote "$(outline_field '.smtp_from_email')")"
+        printf 'SMTP_SECURE=%s\n'         "$(dotenv_quote "$(outline_field '.smtp_secure')")"
+    } > "$REPO_ROOT/outline/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/outline"
@@ -453,25 +575,32 @@ deploy_kanbn() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$KANBN_SECRETS" | yq -r '"# Kan.bn Configuration (auto-generated from secrets.yaml)
-KANBN_URL=\(.kanbn_url)
-AUTH_SECRET=\(.auth_secret)
-POSTGRES_PASSWORD=\(.postgres_password)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-SMTP_USERNAME=\(.smtp_username)
-SMTP_PASSWORD=\(.smtp_password)
-SMTP_FROM_EMAIL=\(.smtp_from_email)
-TRELLO_API_KEY=\(.trello_api_key)
-TRELLO_API_SECRET=\(.trello_api_secret)
-S3_ENDPOINT=\(.s3_endpoint)
-S3_ACCESS_KEY_ID=\(.s3_access_key_id)
-S3_SECRET_ACCESS_KEY=\(.s3_secret_access_key)
-NEXT_PUBLIC_STORAGE_URL=\(.next_public_storage_url)
-WEBHOOK_URL=\(.webhook_url)
-WEBHOOK_SECRET=\(.webhook_secret)"' > "$REPO_ROOT/kanbn/.env"
+    local KANBN_PLAINTEXT
+    KANBN_PLAINTEXT=$(sops -d "$KANBN_SECRETS")
+    kanbn_field() { echo "$KANBN_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Kan.bn Configuration (auto-generated from secrets.yaml)"
+        printf 'KANBN_URL=%s\n'               "$(dotenv_quote "$(kanbn_field '.kanbn_url')")"
+        printf 'AUTH_SECRET=%s\n'             "$(dotenv_quote "$(kanbn_field '.auth_secret')")"
+        printf 'POSTGRES_PASSWORD=%s\n'       "$(dotenv_quote "$(kanbn_field '.postgres_password')")"
+        printf 'SMTP_HOST=%s\n'               "$(dotenv_quote "$(kanbn_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'               "$(dotenv_quote "$(kanbn_field '.smtp_port')")"
+        printf 'SMTP_USERNAME=%s\n'           "$(dotenv_quote "$(kanbn_field '.smtp_username')")"
+        printf 'SMTP_PASSWORD=%s\n'           "$(dotenv_quote "$(kanbn_field '.smtp_password')")"
+        printf 'SMTP_FROM_EMAIL=%s\n'         "$(dotenv_quote "$(kanbn_field '.smtp_from_email')")"
+        printf 'TRELLO_API_KEY=%s\n'          "$(dotenv_quote "$(kanbn_field '.trello_api_key')")"
+        printf 'TRELLO_API_SECRET=%s\n'       "$(dotenv_quote "$(kanbn_field '.trello_api_secret')")"
+        printf 'S3_ENDPOINT=%s\n'             "$(dotenv_quote "$(kanbn_field '.s3_endpoint')")"
+        printf 'S3_ACCESS_KEY_ID=%s\n'        "$(dotenv_quote "$(kanbn_field '.s3_access_key_id')")"
+        printf 'S3_SECRET_ACCESS_KEY=%s\n'    "$(dotenv_quote "$(kanbn_field '.s3_secret_access_key')")"
+        printf 'NEXT_PUBLIC_STORAGE_URL=%s\n' "$(dotenv_quote "$(kanbn_field '.next_public_storage_url')")"
+        printf 'WEBHOOK_URL=%s\n'             "$(dotenv_quote "$(kanbn_field '.webhook_url')")"
+        printf 'WEBHOOK_SECRET=%s\n'          "$(dotenv_quote "$(kanbn_field '.webhook_secret')")"
+    } > "$REPO_ROOT/kanbn/.env"
 
     # Deploy .env and compose files
     ssh "$REMOTE" "mkdir -p ~/apps/kanbn"
@@ -507,31 +636,38 @@ deploy_pm_bot() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$PM_BOT_SECRETS" | yq -r '"# Dreamfinder Configuration (auto-generated from secrets.yaml)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-MATRIX_HOMESERVER=\(.matrix_homeserver)
-MATRIX_ACCESS_TOKEN=\(.matrix_access_token)
-KAN_BASE_URL=\(.kan_base_url)
-KAN_API_KEY=\(.kan_api_key)
-OUTLINE_BASE_URL=\(.outline_base_url)
-OUTLINE_API_KEY=\(.outline_api_key)
-RADICALE_BASE_URL=\(.radicale_base_url)
-RADICALE_USERNAME=\(.radicale_username)
-RADICALE_PASSWORD=\(.radicale_password)
-PLAYWRIGHT_ENABLED=\(.playwright_enabled)
-BOT_NAME=\(.bot_name)
-LOG_LEVEL=\(.log_level)
-API_KEY=\(.api_key)
-LIVEKIT_URL=\(.livekit_url)
-LIVEKIT_API_KEY=\(.livekit_api_key)
-LIVEKIT_API_SECRET=\(.livekit_api_secret)
-ADMIN_IDS=\(.admin_ids)
-MATRIX_ALWAYS_RESPOND_ROOMS=\(.matrix_always_respond_rooms)
-CALENDAR_URL=\(.calendar_url)
-EVENT_TIMEZONE=\(.event_timezone)
-DEPLOY_ANNOUNCE_GROUP_ID=\(.deploy_announce_group_id)"' > "$REPO_ROOT/dreamfinder/.env"
+    local PM_BOT_PLAINTEXT
+    PM_BOT_PLAINTEXT=$(sops -d "$PM_BOT_SECRETS")
+    pm_bot_field() { echo "$PM_BOT_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Dreamfinder Configuration (auto-generated from secrets.yaml)"
+        printf 'ANTHROPIC_API_KEY=%s\n'           "$(dotenv_quote "$(pm_bot_field '.anthropic_api_key')")"
+        printf 'MATRIX_HOMESERVER=%s\n'           "$(dotenv_quote "$(pm_bot_field '.matrix_homeserver')")"
+        printf 'MATRIX_ACCESS_TOKEN=%s\n'         "$(dotenv_quote "$(pm_bot_field '.matrix_access_token')")"
+        printf 'KAN_BASE_URL=%s\n'                "$(dotenv_quote "$(pm_bot_field '.kan_base_url')")"
+        printf 'KAN_API_KEY=%s\n'                 "$(dotenv_quote "$(pm_bot_field '.kan_api_key')")"
+        printf 'OUTLINE_BASE_URL=%s\n'            "$(dotenv_quote "$(pm_bot_field '.outline_base_url')")"
+        printf 'OUTLINE_API_KEY=%s\n'             "$(dotenv_quote "$(pm_bot_field '.outline_api_key')")"
+        printf 'RADICALE_BASE_URL=%s\n'           "$(dotenv_quote "$(pm_bot_field '.radicale_base_url')")"
+        printf 'RADICALE_USERNAME=%s\n'           "$(dotenv_quote "$(pm_bot_field '.radicale_username')")"
+        printf 'RADICALE_PASSWORD=%s\n'           "$(dotenv_quote "$(pm_bot_field '.radicale_password')")"
+        printf 'PLAYWRIGHT_ENABLED=%s\n'          "$(dotenv_quote "$(pm_bot_field '.playwright_enabled')")"
+        printf 'BOT_NAME=%s\n'                    "$(dotenv_quote "$(pm_bot_field '.bot_name')")"
+        printf 'LOG_LEVEL=%s\n'                   "$(dotenv_quote "$(pm_bot_field '.log_level')")"
+        printf 'API_KEY=%s\n'                     "$(dotenv_quote "$(pm_bot_field '.api_key')")"
+        printf 'LIVEKIT_URL=%s\n'                 "$(dotenv_quote "$(pm_bot_field '.livekit_url')")"
+        printf 'LIVEKIT_API_KEY=%s\n'             "$(dotenv_quote "$(pm_bot_field '.livekit_api_key')")"
+        printf 'LIVEKIT_API_SECRET=%s\n'          "$(dotenv_quote "$(pm_bot_field '.livekit_api_secret')")"
+        printf 'ADMIN_IDS=%s\n'                   "$(dotenv_quote "$(pm_bot_field '.admin_ids')")"
+        printf 'MATRIX_ALWAYS_RESPOND_ROOMS=%s\n' "$(dotenv_quote "$(pm_bot_field '.matrix_always_respond_rooms')")"
+        printf 'CALENDAR_URL=%s\n'                "$(dotenv_quote "$(pm_bot_field '.calendar_url')")"
+        printf 'EVENT_TIMEZONE=%s\n'              "$(dotenv_quote "$(pm_bot_field '.event_timezone')")"
+        printf 'DEPLOY_ANNOUNCE_GROUP_ID=%s\n'    "$(dotenv_quote "$(pm_bot_field '.deploy_announce_group_id')")"
+    } > "$REPO_ROOT/dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder/src"
@@ -577,33 +713,40 @@ deploy_embodied_dreamfinder() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
+    # The per-field yq fallback default keeps absent keys empty — except
+    # VOICE_MODE which defaults to "realtime" as before.
     echo "Generating .env from encrypted secrets..."
-    # NOTE: inner double-quotes inside the yq template MUST be backslash-escaped
-    # (`\"…\"`) — yq v4.50.1+ rejects unescaped inner quotes with
-    # `lexer: invalid input text`. See incident 2026-05-09 during
-    # DREAMFINDER_API_KEY rotation. Other deploy_* templates above don't
-    # have `// "default"` literals so they happen to work.
-    sops -d "$EDF_SECRETS" | yq -r '"# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)
-AUTH_PASSWORD=\(.auth_password // \"\")
-AUTH_SECRET=\(.auth_secret // \"\")
-OPENAI_API_KEY=\(.openai_api_key // \"\")
-ANTHROPIC_API_KEY=\(.anthropic_api_key // \"\")
-VOICE_MODE=\(.voice_mode // \"realtime\")
-OUTLINE_API_KEY=\(.outline_api_key // \"\")
-RADICALE_CALENDAR_URL=\(.radicale_calendar_url // \"\")
-RADICALE_USERNAME=\(.radicale_username // \"\")
-RADICALE_PASSWORD=\(.radicale_password // \"\")
-DREAMFINDER_API_URL=\(.dreamfinder_api_url // \"\")
-DREAMFINDER_API_KEY=\(.dreamfinder_api_key // \"\")
-LIVEKIT_URL=\(.livekit_url // \"\")
-LIVEKIT_API_KEY=\(.livekit_api_key // \"\")
-LIVEKIT_API_SECRET=\(.livekit_api_secret // \"\")
-DF_BRAIN=\(.df_brain // \"api\")
-TTS_ENGINE=\(.tts_engine // \"kokoro\")
-LYRA_SSH_KEY=\(.lyra_ssh_key // \"\")
-LYRA_SSH_HOST=\(.lyra_ssh_host // \"ubuntu@207.211.145.30\")
-OPENAI_TTS_VOICE=\(.openai_tts_voice // \"sage\")"' > "$REPO_ROOT/embodied-dreamfinder/.env"
+    local EDF_PLAINTEXT
+    EDF_PLAINTEXT=$(sops -d "$EDF_SECRETS")
+    # $2 is an optional fallback for a missing/null key (default empty).
+    edf_field() { echo "$EDF_PLAINTEXT" | yq -r "$1 // \"${2:-}\""; }
+    {
+        echo "# Embodied Dreamfinder Configuration (auto-generated from secrets.yaml)"
+        printf 'AUTH_PASSWORD=%s\n'         "$(dotenv_quote "$(edf_field '.auth_password')")"
+        printf 'AUTH_SECRET=%s\n'           "$(dotenv_quote "$(edf_field '.auth_secret')")"
+        printf 'OPENAI_API_KEY=%s\n'        "$(dotenv_quote "$(edf_field '.openai_api_key')")"
+        printf 'ANTHROPIC_API_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.anthropic_api_key')")"
+        printf 'VOICE_MODE=%s\n'            "$(dotenv_quote "$(edf_field '.voice_mode' 'realtime')")"
+        printf 'OUTLINE_API_KEY=%s\n'       "$(dotenv_quote "$(edf_field '.outline_api_key')")"
+        printf 'RADICALE_CALENDAR_URL=%s\n' "$(dotenv_quote "$(edf_field '.radicale_calendar_url')")"
+        printf 'RADICALE_USERNAME=%s\n'     "$(dotenv_quote "$(edf_field '.radicale_username')")"
+        printf 'RADICALE_PASSWORD=%s\n'     "$(dotenv_quote "$(edf_field '.radicale_password')")"
+        printf 'DREAMFINDER_API_URL=%s\n'   "$(dotenv_quote "$(edf_field '.dreamfinder_api_url')")"
+        printf 'DREAMFINDER_API_KEY=%s\n'   "$(dotenv_quote "$(edf_field '.dreamfinder_api_key')")"
+        printf 'LIVEKIT_URL=%s\n'           "$(dotenv_quote "$(edf_field '.livekit_url')")"
+        printf 'LIVEKIT_API_KEY=%s\n'       "$(dotenv_quote "$(edf_field '.livekit_api_key')")"
+        printf 'LIVEKIT_API_SECRET=%s\n'    "$(dotenv_quote "$(edf_field '.livekit_api_secret')")"
+        # lyra-live fields (merged from feat/lyra-live-voice; routed through the
+        # same dotenv_quote hardening as every other secret above).
+        printf 'DF_BRAIN=%s\n'              "$(dotenv_quote "$(edf_field '.df_brain' 'api')")"
+        printf 'TTS_ENGINE=%s\n'            "$(dotenv_quote "$(edf_field '.tts_engine' 'kokoro')")"
+        printf 'LYRA_SSH_KEY=%s\n'          "$(dotenv_quote "$(edf_field '.lyra_ssh_key')")"
+        printf 'LYRA_SSH_HOST=%s\n'         "$(dotenv_quote "$(edf_field '.lyra_ssh_host' 'ubuntu@207.211.145.30')")"
+        printf 'OPENAI_TTS_VOICE=%s\n'      "$(dotenv_quote "$(edf_field '.openai_tts_voice' 'sage')")"
+    } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
@@ -645,15 +788,25 @@ deploy_livekit() {
     API_SECRET=$(sops -d "$LK_SECRETS" | yq -r '.livekit_api_secret')
     EXTERNAL_IP=$(sops -d "$LK_SECRETS" | yq -r '.external_ip')
 
-    # Generate livekit.yaml with real credentials and IP
-    sed -e "s/LIVEKIT_API_KEY/$API_KEY/" \
-        -e "s/LIVEKIT_API_SECRET/$API_SECRET/" \
-        "$REPO_ROOT/livekit/livekit.yaml" > "$REPO_ROOT/livekit/livekit-generated.yaml"
+    # Generate livekit.yaml with real credentials and IP.
+    #
+    # Use yq strenv templating, NOT sed: a secret containing sed-significant
+    # bytes (/, &, \) or YAML-significant bytes (:, #, ", newline) would corrupt
+    # the config or inject YAML under the old `sed s/PLACEHOLDER/$secret/`
+    # approach. strenv reads the value from the environment (never the command
+    # line, so it can't leak via `ps`/history) and yq emits it as a properly
+    # quoted YAML scalar. The template `keys:` map has exactly one placeholder
+    # entry (LIVEKIT_API_KEY: LIVEKIT_API_SECRET); we replace the whole map with
+    # the real key->secret pair, and set rtc.node_ip when an external IP is given.
+    LK_KEY="$API_KEY" LK_SECRET="$API_SECRET" yq eval '
+        .keys = {} |
+        .keys[strenv(LK_KEY)] = strenv(LK_SECRET)
+    ' "$REPO_ROOT/livekit/livekit.yaml" > "$REPO_ROOT/livekit/livekit-generated.yaml"
 
     # Inject node_ip if external IP is set
     if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
-        sed -i'' -e "/use_external_ip: true/a\\
-  node_ip: $EXTERNAL_IP" "$REPO_ROOT/livekit/livekit-generated.yaml"
+        LK_IP="$EXTERNAL_IP" yq eval -i '.rtc.node_ip = strenv(LK_IP)' \
+            "$REPO_ROOT/livekit/livekit-generated.yaml"
     fi
 
     # Deploy files
@@ -697,18 +850,25 @@ deploy_tech_world_bots() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$TWB_SECRETS" | yq -r '"LIVEKIT_URL=\(.livekit_url)
-LIVEKIT_API_KEY=\(.livekit_api_key)
-LIVEKIT_API_SECRET=\(.livekit_api_secret)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-OPENAI_API_KEY=\(.openai_api_key)
-KAN_BASE_URL=\(.kan_base_url)
-KAN_API_KEY=\(.kan_api_key)
-KAN_BOARD_ID=\(.kan_board_id)
-OUTLINE_BASE_URL=\(.outline_base_url)
-OUTLINE_API_KEY=\(.outline_api_key)"' > "$REPO_ROOT/tech-world-bots/.env"
+    local TWB_PLAINTEXT
+    TWB_PLAINTEXT=$(sops -d "$TWB_SECRETS")
+    twb_field() { echo "$TWB_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        printf 'LIVEKIT_URL=%s\n'        "$(dotenv_quote "$(twb_field '.livekit_url')")"
+        printf 'LIVEKIT_API_KEY=%s\n'    "$(dotenv_quote "$(twb_field '.livekit_api_key')")"
+        printf 'LIVEKIT_API_SECRET=%s\n' "$(dotenv_quote "$(twb_field '.livekit_api_secret')")"
+        printf 'ANTHROPIC_API_KEY=%s\n'  "$(dotenv_quote "$(twb_field '.anthropic_api_key')")"
+        printf 'OPENAI_API_KEY=%s\n'     "$(dotenv_quote "$(twb_field '.openai_api_key')")"
+        printf 'KAN_BASE_URL=%s\n'       "$(dotenv_quote "$(twb_field '.kan_base_url')")"
+        printf 'KAN_API_KEY=%s\n'        "$(dotenv_quote "$(twb_field '.kan_api_key')")"
+        printf 'KAN_BOARD_ID=%s\n'       "$(dotenv_quote "$(twb_field '.kan_board_id')")"
+        printf 'OUTLINE_BASE_URL=%s\n'   "$(dotenv_quote "$(twb_field '.outline_base_url')")"
+        printf 'OUTLINE_API_KEY=%s\n'    "$(dotenv_quote "$(twb_field '.outline_api_key')")"
+    } > "$REPO_ROOT/tech-world-bots/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/tech-world-bots/src"
@@ -777,21 +937,28 @@ deploy_matrix() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$MATRIX_SECRETS" | yq -r '"# Matrix Configuration (auto-generated from secrets.yaml)
-MATRIX_SERVER_NAME=\(.matrix_server_name)
-REGISTRATION_TOKEN=\(.registration_token)
-RELAY_AS_TOKEN=\(.relay_as_token)
-RELAY_HS_TOKEN=\(.relay_hs_token)
-PORTAL_ROOMS=\(.portal_rooms)
-HUB_ROOM_ID=\(.hub_room_id)
-RELAY_DOUBLE_PUPPETS=\(.relay_double_puppets)
-RELAY_LOG_LEVEL=\(.relay_log_level)
-HF_RELAY_AS_TOKEN=\(.hf_relay_as_token)
-HF_RELAY_HS_TOKEN=\(.hf_relay_hs_token)
-HF_PORTAL_ROOMS=\(.hf_portal_rooms)
-HF_HUB_ROOM_ID=\(.hf_hub_room_id)"' > "$REPO_ROOT/matrix/.env"
+    local MATRIX_PLAINTEXT
+    MATRIX_PLAINTEXT=$(sops -d "$MATRIX_SECRETS")
+    matrix_field() { echo "$MATRIX_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Matrix Configuration (auto-generated from secrets.yaml)"
+        printf 'MATRIX_SERVER_NAME=%s\n'   "$(dotenv_quote "$(matrix_field '.matrix_server_name')")"
+        printf 'REGISTRATION_TOKEN=%s\n'   "$(dotenv_quote "$(matrix_field '.registration_token')")"
+        printf 'RELAY_AS_TOKEN=%s\n'       "$(dotenv_quote "$(matrix_field '.relay_as_token')")"
+        printf 'RELAY_HS_TOKEN=%s\n'       "$(dotenv_quote "$(matrix_field '.relay_hs_token')")"
+        printf 'PORTAL_ROOMS=%s\n'         "$(dotenv_quote "$(matrix_field '.portal_rooms')")"
+        printf 'HUB_ROOM_ID=%s\n'          "$(dotenv_quote "$(matrix_field '.hub_room_id')")"
+        printf 'RELAY_DOUBLE_PUPPETS=%s\n' "$(dotenv_quote "$(matrix_field '.relay_double_puppets')")"
+        printf 'RELAY_LOG_LEVEL=%s\n'      "$(dotenv_quote "$(matrix_field '.relay_log_level')")"
+        printf 'HF_RELAY_AS_TOKEN=%s\n'    "$(dotenv_quote "$(matrix_field '.hf_relay_as_token')")"
+        printf 'HF_RELAY_HS_TOKEN=%s\n'    "$(dotenv_quote "$(matrix_field '.hf_relay_hs_token')")"
+        printf 'HF_PORTAL_ROOMS=%s\n'      "$(dotenv_quote "$(matrix_field '.hf_portal_rooms')")"
+        printf 'HF_HUB_ROOM_ID=%s\n'       "$(dotenv_quote "$(matrix_field '.hf_hub_room_id')")"
+    } > "$REPO_ROOT/matrix/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/matrix"
@@ -837,11 +1004,18 @@ deploy_youtube_rag() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$RAG_SECRETS" | yq -r '"# YouTube RAG Configuration (auto-generated from secrets.yaml)
-ANTHROPIC_API_KEY=\(.anthropic_api_key)
-YOUTUBE_API_KEY=\(.youtube_api_key)"' > "$REPO_ROOT/youtube-rag/.env"
+    local RAG_PLAINTEXT
+    RAG_PLAINTEXT=$(sops -d "$RAG_SECRETS")
+    rag_field() { echo "$RAG_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# YouTube RAG Configuration (auto-generated from secrets.yaml)"
+        printf 'ANTHROPIC_API_KEY=%s\n' "$(dotenv_quote "$(rag_field '.anthropic_api_key')")"
+        printf 'YOUTUBE_API_KEY=%s\n'   "$(dotenv_quote "$(rag_field '.youtube_api_key')")"
+    } > "$REPO_ROOT/youtube-rag/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/youtube-rag/src"
@@ -900,42 +1074,51 @@ deploy_claudius() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
+    # CLAUDE_CREDENTIALS_JSON in particular is a JSON blob full of " and { } —
+    # exactly the kind of value the old bare yq template could mangle.
     echo "Generating .env from encrypted secrets..."
-    sops -d "$CLAUDIUS_SECRETS" | yq -r '"# Claudius Configuration (auto-generated from secrets.yaml)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
-CLAUDE_CREDENTIALS_JSON=\(.claude_credentials_json)
-GH_TOKEN=\(.gh_token)
-AGENT_NAME=\(.agent_name)
-MY_EMAIL=\(.my_email)
-PEER_EMAIL=\(.peer_email)
-OWNER_EMAIL=\(.owner_email)
-CC_EMAIL=\(.cc_email)
-IMAP_HOST=\(.imap_host)
-IMAP_PORT=\(.imap_port)
-IMAP_USER=\(.imap_user)
-IMAP_PASS=\(.imap_pass)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-GIT_USER_NAME=\(.git_user_name)
-GIT_USER_EMAIL=\(.git_user_email)
-JOURNAL_REPO=\(.journal_repo)
-ARCHIVE_REPO=\(.archive_repo)
-ALLOWED_SENDERS=\(.allowed_senders)
-SEND_FIRST=\(.send_first)
-POLL_INTERVAL=\(.poll_interval)
-MODEL=\(.model)
-MAX_TURNS=\(.max_turns)
-WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
-QUOTA_RESET_DAY=\(.quota_reset_day)
-QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
-MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
-REPORT_EVERY_N=\(.report_every_n)
-EVOLUTION_PROBABILITY=\(.evolution_probability)
-EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
-INITIATIVE_PROBABILITY=\(.initiative_probability)
-INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
-INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/claudius/.env"
+    local CLAUDIUS_PLAINTEXT
+    CLAUDIUS_PLAINTEXT=$(sops -d "$CLAUDIUS_SECRETS")
+    claudius_field() { echo "$CLAUDIUS_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Claudius Configuration (auto-generated from secrets.yaml)"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'   "$(dotenv_quote "$(claudius_field '.claude_code_oauth_token')")"
+        printf 'CLAUDE_CREDENTIALS_JSON=%s\n'   "$(dotenv_quote "$(claudius_field '.claude_credentials_json')")"
+        printf 'GH_TOKEN=%s\n'                  "$(dotenv_quote "$(claudius_field '.gh_token')")"
+        printf 'AGENT_NAME=%s\n'                "$(dotenv_quote "$(claudius_field '.agent_name')")"
+        printf 'MY_EMAIL=%s\n'                  "$(dotenv_quote "$(claudius_field '.my_email')")"
+        printf 'PEER_EMAIL=%s\n'                "$(dotenv_quote "$(claudius_field '.peer_email')")"
+        printf 'OWNER_EMAIL=%s\n'               "$(dotenv_quote "$(claudius_field '.owner_email')")"
+        printf 'CC_EMAIL=%s\n'                  "$(dotenv_quote "$(claudius_field '.cc_email')")"
+        printf 'IMAP_HOST=%s\n'                 "$(dotenv_quote "$(claudius_field '.imap_host')")"
+        printf 'IMAP_PORT=%s\n'                 "$(dotenv_quote "$(claudius_field '.imap_port')")"
+        printf 'IMAP_USER=%s\n'                 "$(dotenv_quote "$(claudius_field '.imap_user')")"
+        printf 'IMAP_PASS=%s\n'                 "$(dotenv_quote "$(claudius_field '.imap_pass')")"
+        printf 'SMTP_HOST=%s\n'                 "$(dotenv_quote "$(claudius_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'                 "$(dotenv_quote "$(claudius_field '.smtp_port')")"
+        printf 'GIT_USER_NAME=%s\n'             "$(dotenv_quote "$(claudius_field '.git_user_name')")"
+        printf 'GIT_USER_EMAIL=%s\n'            "$(dotenv_quote "$(claudius_field '.git_user_email')")"
+        printf 'JOURNAL_REPO=%s\n'              "$(dotenv_quote "$(claudius_field '.journal_repo')")"
+        printf 'ARCHIVE_REPO=%s\n'              "$(dotenv_quote "$(claudius_field '.archive_repo')")"
+        printf 'ALLOWED_SENDERS=%s\n'           "$(dotenv_quote "$(claudius_field '.allowed_senders')")"
+        printf 'SEND_FIRST=%s\n'                "$(dotenv_quote "$(claudius_field '.send_first')")"
+        printf 'POLL_INTERVAL=%s\n'             "$(dotenv_quote "$(claudius_field '.poll_interval')")"
+        printf 'MODEL=%s\n'                     "$(dotenv_quote "$(claudius_field '.model')")"
+        printf 'MAX_TURNS=%s\n'                 "$(dotenv_quote "$(claudius_field '.max_turns')")"
+        printf 'WEEKLY_TURN_QUOTA=%s\n'         "$(dotenv_quote "$(claudius_field '.weekly_turn_quota')")"
+        printf 'QUOTA_RESET_DAY=%s\n'           "$(dotenv_quote "$(claudius_field '.quota_reset_day')")"
+        printf 'QUOTA_RESET_HOUR_UTC=%s\n'      "$(dotenv_quote "$(claudius_field '.quota_reset_hour_utc')")"
+        printf 'MAX_RETRIES_PER_MESSAGE=%s\n'   "$(dotenv_quote "$(claudius_field '.max_retries_per_message')")"
+        printf 'REPORT_EVERY_N=%s\n'            "$(dotenv_quote "$(claudius_field '.report_every_n')")"
+        printf 'EVOLUTION_PROBABILITY=%s\n'     "$(dotenv_quote "$(claudius_field '.evolution_probability')")"
+        printf 'EVOLUTION_MAX_TURNS=%s\n'       "$(dotenv_quote "$(claudius_field '.evolution_max_turns')")"
+        printf 'INITIATIVE_PROBABILITY=%s\n'    "$(dotenv_quote "$(claudius_field '.initiative_probability')")"
+        printf 'INITIATIVE_MAX_TURNS=%s\n'      "$(dotenv_quote "$(claudius_field '.initiative_max_turns')")"
+        printf 'INITIATIVE_COOLDOWN_HOURS=%s\n' "$(dotenv_quote "$(claudius_field '.initiative_cooldown_hours')")"
+    } > "$REPO_ROOT/claudius/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/claudius/src"
@@ -986,41 +1169,48 @@ deploy_lugh() {
         return 1
     fi
 
-    # Generate .env from encrypted secrets
+    # Generate .env from encrypted secrets. Decrypt once, then route every value
+    # through dotenv_quote so a secret with dotenv-significant bytes survives
+    # docker compose's dotenv parser intact (see deploy_outline for rationale).
     echo "Generating .env from encrypted secrets..."
-    sops -d "$LUGH_SECRETS" | yq -r '"# Lugh Configuration (auto-generated from secrets.yaml)
-CLAUDE_CODE_OAUTH_TOKEN=\(.claude_code_oauth_token)
-GH_TOKEN=\(.gh_token)
-AGENT_NAME=\(.agent_name)
-MY_EMAIL=\(.my_email)
-PEER_EMAIL=\(.peer_email)
-OWNER_EMAIL=\(.owner_email)
-CC_EMAIL=\(.cc_email)
-IMAP_HOST=\(.imap_host)
-IMAP_PORT=\(.imap_port)
-IMAP_USER=\(.imap_user)
-IMAP_PASS=\(.imap_pass)
-SMTP_HOST=\(.smtp_host)
-SMTP_PORT=\(.smtp_port)
-GIT_USER_NAME=\(.git_user_name)
-GIT_USER_EMAIL=\(.git_user_email)
-JOURNAL_REPO=\(.journal_repo)
-ARCHIVE_REPO=\(.archive_repo)
-ALLOWED_SENDERS=\(.allowed_senders)
-SEND_FIRST=\(.send_first)
-POLL_INTERVAL=\(.poll_interval)
-MODEL=\(.model)
-MAX_TURNS=\(.max_turns)
-WEEKLY_TURN_QUOTA=\(.weekly_turn_quota)
-QUOTA_RESET_DAY=\(.quota_reset_day)
-QUOTA_RESET_HOUR_UTC=\(.quota_reset_hour_utc)
-MAX_RETRIES_PER_MESSAGE=\(.max_retries_per_message)
-REPORT_EVERY_N=\(.report_every_n)
-EVOLUTION_PROBABILITY=\(.evolution_probability)
-EVOLUTION_MAX_TURNS=\(.evolution_max_turns)
-INITIATIVE_PROBABILITY=\(.initiative_probability)
-INITIATIVE_MAX_TURNS=\(.initiative_max_turns)
-INITIATIVE_COOLDOWN_HOURS=\(.initiative_cooldown_hours)"' > "$REPO_ROOT/lugh/.env"
+    local LUGH_PLAINTEXT
+    LUGH_PLAINTEXT=$(sops -d "$LUGH_SECRETS")
+    lugh_field() { echo "$LUGH_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        echo "# Lugh Configuration (auto-generated from secrets.yaml)"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'   "$(dotenv_quote "$(lugh_field '.claude_code_oauth_token')")"
+        printf 'GH_TOKEN=%s\n'                  "$(dotenv_quote "$(lugh_field '.gh_token')")"
+        printf 'AGENT_NAME=%s\n'                "$(dotenv_quote "$(lugh_field '.agent_name')")"
+        printf 'MY_EMAIL=%s\n'                  "$(dotenv_quote "$(lugh_field '.my_email')")"
+        printf 'PEER_EMAIL=%s\n'                "$(dotenv_quote "$(lugh_field '.peer_email')")"
+        printf 'OWNER_EMAIL=%s\n'               "$(dotenv_quote "$(lugh_field '.owner_email')")"
+        printf 'CC_EMAIL=%s\n'                  "$(dotenv_quote "$(lugh_field '.cc_email')")"
+        printf 'IMAP_HOST=%s\n'                 "$(dotenv_quote "$(lugh_field '.imap_host')")"
+        printf 'IMAP_PORT=%s\n'                 "$(dotenv_quote "$(lugh_field '.imap_port')")"
+        printf 'IMAP_USER=%s\n'                 "$(dotenv_quote "$(lugh_field '.imap_user')")"
+        printf 'IMAP_PASS=%s\n'                 "$(dotenv_quote "$(lugh_field '.imap_pass')")"
+        printf 'SMTP_HOST=%s\n'                 "$(dotenv_quote "$(lugh_field '.smtp_host')")"
+        printf 'SMTP_PORT=%s\n'                 "$(dotenv_quote "$(lugh_field '.smtp_port')")"
+        printf 'GIT_USER_NAME=%s\n'             "$(dotenv_quote "$(lugh_field '.git_user_name')")"
+        printf 'GIT_USER_EMAIL=%s\n'            "$(dotenv_quote "$(lugh_field '.git_user_email')")"
+        printf 'JOURNAL_REPO=%s\n'              "$(dotenv_quote "$(lugh_field '.journal_repo')")"
+        printf 'ARCHIVE_REPO=%s\n'              "$(dotenv_quote "$(lugh_field '.archive_repo')")"
+        printf 'ALLOWED_SENDERS=%s\n'           "$(dotenv_quote "$(lugh_field '.allowed_senders')")"
+        printf 'SEND_FIRST=%s\n'                "$(dotenv_quote "$(lugh_field '.send_first')")"
+        printf 'POLL_INTERVAL=%s\n'             "$(dotenv_quote "$(lugh_field '.poll_interval')")"
+        printf 'MODEL=%s\n'                     "$(dotenv_quote "$(lugh_field '.model')")"
+        printf 'MAX_TURNS=%s\n'                 "$(dotenv_quote "$(lugh_field '.max_turns')")"
+        printf 'WEEKLY_TURN_QUOTA=%s\n'         "$(dotenv_quote "$(lugh_field '.weekly_turn_quota')")"
+        printf 'QUOTA_RESET_DAY=%s\n'           "$(dotenv_quote "$(lugh_field '.quota_reset_day')")"
+        printf 'QUOTA_RESET_HOUR_UTC=%s\n'      "$(dotenv_quote "$(lugh_field '.quota_reset_hour_utc')")"
+        printf 'MAX_RETRIES_PER_MESSAGE=%s\n'   "$(dotenv_quote "$(lugh_field '.max_retries_per_message')")"
+        printf 'REPORT_EVERY_N=%s\n'            "$(dotenv_quote "$(lugh_field '.report_every_n')")"
+        printf 'EVOLUTION_PROBABILITY=%s\n'     "$(dotenv_quote "$(lugh_field '.evolution_probability')")"
+        printf 'EVOLUTION_MAX_TURNS=%s\n'       "$(dotenv_quote "$(lugh_field '.evolution_max_turns')")"
+        printf 'INITIATIVE_PROBABILITY=%s\n'    "$(dotenv_quote "$(lugh_field '.initiative_probability')")"
+        printf 'INITIATIVE_MAX_TURNS=%s\n'      "$(dotenv_quote "$(lugh_field '.initiative_max_turns')")"
+        printf 'INITIATIVE_COOLDOWN_HOURS=%s\n' "$(dotenv_quote "$(lugh_field '.initiative_cooldown_hours')")"
+    } > "$REPO_ROOT/lugh/.env"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/lugh/src"
@@ -1059,6 +1249,7 @@ case $SERVICE in
         deploy_service caddy
         deploy_site
         deploy_invite
+        deploy_galaxy
         deploy_outline
         deploy_kanbn
         deploy_radicale
@@ -1097,6 +1288,9 @@ case $SERVICE in
     invite)
         deploy_invite
         ;;
+    galaxy)
+        deploy_galaxy
+        ;;
     imagineering-contact-us|contact)
         deploy_contact
         ;;
@@ -1126,7 +1320,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite|galaxy]"
         exit 1
         ;;
 esac

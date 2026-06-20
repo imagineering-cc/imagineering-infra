@@ -10,6 +10,7 @@ services:
       - caddy_config:/config
       - /home/nick/apps/site:/srv/site:ro
       - /home/nick/apps/invite:/srv/invite:ro
+      - /home/nick/apps/galaxy:/srv/galaxy:ro
       - /srv/tech-world:/srv/tech-world:ro
 
 volumes:

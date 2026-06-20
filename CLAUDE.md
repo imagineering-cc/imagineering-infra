@@ -51,7 +51,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 | Caddy | 80/443 | - | Reverse proxy, auto-TLS via Let's Encrypt |
 | img-outline | 3012 | outline.imagineering.cc | Team wiki (Notion-like) |
 | (img-outline-minio) | 9010 | storage.imagineering.cc | S3-compatible file storage for img-outline |
-| (img-kanbn — see xdeca) | 3003 | kan.imagineering.cc | Kanban — currently shares xdeca's kanbn instance |
+| img-kanbn | 3013 | kan.imagineering.cc | Kanban (Trello alternative) |
 | Radicale | 5232/5233 | dav.imagineering.cc | CalDAV/CardDAV (calendar & contacts) |
 | matrix-continuwuity | 8008 | matrix.imagineering.cc | Matrix homeserver (Conduit fork) |
 | (matrix bridges) | - | - | mautrix-signal/whatsapp/telegram/discord, plus relay-bot + relay-bot-hf |
@@ -62,6 +62,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 | youtube-rag | 3010/8010 | rag.imagineering.cc, rag-api.imagineering.cc | YouTube transcript RAG (frontend + backend + chroma) |
 | img-contact | 3014 | invite.imagineering.cc | Contact-form / QR invite landing |
 | Claudius | - | - | Headless email-polling Claude Code agent |
+| cd-bus | - | cd-bus.nick-meinhold.workers.dev | Deploy-bus SSE relay (Cloudflare Worker + Durable Object, source in `cd-bus/`) — fans CI `image.published` events to host subscribers; pilot live on downstream-server since 2026-06-12 |
 
 ### Imagineering (internal — bound to 127.0.0.1, Caddy-fronted, Bearer auth)
 
@@ -267,6 +268,27 @@ Boot volume can be resized online — grow partition with `growpart` + `resize2f
 - Instance: `ocid1.instance.oc1.ap-sydney-1.anzxsljr5jyppsicpdt4ecunqcvoxmvhauzsq5co53joaumapptj3ktxoqhq`
 - Boot volume: `ocid1.bootvolume.oc1.ap-sydney-1.abzxsljrvp4mpltca5qqqt3qldbs252qlqp35hr6ydsdvew2ch444zmcqakq`
 
+## DNS
+
+**Cloudflare is the source of truth for `imagineering.cc` DNS.** The domain's
+nameservers are `hattie`/`karl.ns.cloudflare.com`, so all live records are
+served from the Cloudflare zone:
+
+- Zone ID: `1444f67680d10386df2a55e5f016e2b2`
+- Account ID: `fc0bb404a04968a041ca7d8475e2ffad`
+
+**Namecheap is the registrar only** (renewals + NS delegation) — it does **not**
+serve DNS. The old `dns/` Terraform (Namecheap provider, `mode = "OVERWRITE"`)
+was non-authoritative dead config and was **removed** (see git history before
+this commit / the "retire dead dns/" PR). It defined: bare `@` A → server IP,
+wildcard `*` A → server IP, SPF (`v=spf1 include:sendinblue.com ~all`, for Brevo
+email), and DMARC (`v=DMARC1; p=none;`). Those equivalents live in Cloudflare
+now — if you ever need to recreate DNS-as-code, use the Cloudflare provider and
+import the live zone, don't resurrect the Namecheap config.
+
+> Edit DNS via the Cloudflare dashboard or API (zone above). The Namecheap API
+> creds that `dns/secrets.yaml` held are unused after this removal.
+
 ## Secrets Management
 
 Everything is encrypted with SOPS/age. The age key is at the default location: `~/.config/sops/age/keys.txt`
@@ -452,7 +474,9 @@ across Kan.bn, Outline, Radicale, and Playwright. No slash commands — natural 
 | `OUTLINE_API_KEY` | Outline API key |
 | `RADICALE_BASE_URL` | Radicale CalDAV URL |
 | `BRIDGE_BOT_IDS` | Bridge appservice bot MXIDs excluded from DM member counting (portal-aware isDm) |
-| `WHATSAPP_MANAGEMENT_ROOM` | River's WhatsApp-bridge management room; enables the `start_private_chat` tool |
+| `WHATSAPP_MANAGEMENT_ROOM` | River's WhatsApp-bridge management room; adds `whatsapp` to `start_private_chat`'s platform enum |
+| `TELEGRAM_MANAGEMENT_ROOM` | River's Telegram-bridge management room; adds `telegram` to the enum |
+| `SIGNAL_MANAGEMENT_ROOM` / `DISCORD_MANAGEMENT_ROOM` | Same pattern; unset until those bridge logins exist |
 
 ## Setup
 

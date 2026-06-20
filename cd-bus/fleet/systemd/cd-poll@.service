@@ -1,0 +1,23 @@
+# Deploy-bus 5-min poll backstop — FLEET TEMPLATE (claude-tasks #714).
+# The pull leg that catches anything the SSE push misses. Runs the SAME shared
+# deploy action as the SSE leg (idempotent, flock-serialised).
+# Install at /etc/systemd/system/cd-poll@.service
+[Unit]
+Description=Deploy-bus CD pull backstop for %i
+Documentation=https://github.com/imagineering-cc/imagineering-infra/blob/main/cd-bus/fleet/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=nick
+EnvironmentFile=-/etc/cd-bus/common.env
+EnvironmentFile=-/etc/cd-bus/%i.env
+ExecStart=/opt/cd-bus/deploy.sh %i
+# Transient pull errors must not propagate as unit failure — the next tick
+# retries. deploy.sh exits 2 (NOT in this list) only after >=3 consecutive
+# failures, so OnFailure means the pull leg has been broken ~15 min.
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
