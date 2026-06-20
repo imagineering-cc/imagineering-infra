@@ -71,7 +71,8 @@ scripts/watchers/
 │   └── watcher-base.sh    # shared helpers + state machine (sourced by all watchers)
 ├── template.sh            # skeleton for new watchers
 ├── README.md              # this file
-├── disk-usage-watch.sh    # built example
+├── disk-usage-watch.sh    # built example (recurring threshold-alert)
+├── email-health-watch.sh  # built example (recurring; Brevo sender-auth + volume + errors)
 └── …                       # other watchers
 ```
 
@@ -250,6 +251,65 @@ listed here so the template has demand-side context):
 Each of these has the right shape (external state, transitions, want-to-be-notified,
 genuinely-stops-mattering-after-resolution). Each is also <50 lines of
 phase logic on top of the template. If you build one, link it back here.
+
+## Built: email-health-watch
+
+`email-health-watch.sh` catches the class of silent transactional-email
+failure that hit imagineering.cc on 2026-06-20: the Brevo sending domain was
+unauthenticated, so Brevo accepted every send (250 OK at SMTP) then dropped it
+at processing — every app thought email worked, no alert fired, password
+resets / magic links / contact-form leads silently vanished for days.
+
+It is a **recurring threshold-alert** (modelled on `disk-usage-watch.sh`,
+*not* the self-disabling two-phase template): `phase_a_check` runs three checks
+every cycle and always returns 1, so the state machine never advances and the
+watcher never removes its own cron entry. Each check debounces to **at most one
+alert per UTC day** via a per-check sentinel under `~/.config/imagineering/`,
+and clears that sentinel on recovery.
+
+Three checks against the Brevo REST API (`https://api.brevo.com/v3`):
+
+1. **Domain auth** — `GET /senders/domains`: each required domain
+   (`imagineering.cc`, `xdeca.com`) must be present with `authenticated:true`
+   **and** `verified:true`. This is the check that would have caught the
+   incident. Tunable: `REQUIRED_DOMAINS`.
+2. **Daily volume** — `GET /smtp/statistics/aggregatedReport?days=1` `.requests`
+   vs the shared free-plan cap. Alerts at `>= WARN_PCT%` of `CAP` (default 70%
+   of 300 = 210) — early warning before a flood exhausts the cap and starves
+   auth email. Tunable: `CAP`, `WARN_PCT`.
+3. **Error spike** — same report `.error` field. Alerts when `> ERROR_THRESHOLD`
+   (default 25/day). Tunable: `ERROR_THRESHOLD`.
+
+JSON is parsed with `python3` (robust against missing keys) rather than
+grep/jq chains. If `BREVO_API_KEY` is absent or the API is unreachable, the
+watcher logs and skips that cycle — it never crashes cron.
+
+### Install on Sydney
+
+```bash
+# 1. Lib + script (lib likely already present from other watchers).
+scp scripts/watchers/lib/watcher-base.sh 149.118.69.221:/tmp/   # if not already there
+ssh 149.118.69.221 'sudo install -m 0755 -o ubuntu -g ubuntu /tmp/watcher-base.sh /home/ubuntu/lib/'
+scp scripts/watchers/email-health-watch.sh 149.118.69.221:/tmp/
+ssh 149.118.69.221 'sudo install -m 0755 -o ubuntu -g ubuntu /tmp/email-health-watch.sh /home/ubuntu/'
+
+# 2. Install the Brevo credential file (mode 0600, mirrors notify-credentials).
+#    The key lives in notify/secrets.yaml under brevo_api_key. Build the
+#    envfile locally and scp it — do NOT echo the key over an interactive ssh
+#    (it lands in shell history / logs).
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
+umask 077
+printf 'BREVO_API_KEY=%s\n' "$(sops -d notify/secrets.yaml | yq -r '.brevo_api_key')" > /tmp/brevo-credentials
+scp /tmp/brevo-credentials 149.118.69.221:/tmp/
+ssh 149.118.69.221 'install -m 0600 /tmp/brevo-credentials ~/.config/imagineering/brevo-credentials && rm -f /tmp/brevo-credentials'
+rm -f /tmp/brevo-credentials
+
+# 3. Install the cron entry (every 4 hours, off the hour). Tag MUST match CRON_TAG.
+ssh 149.118.69.221 'crontab -l | { cat; echo "23 */4 * * * /home/ubuntu/email-health-watch.sh  # email-health-watch"; } | crontab -'
+
+# 4. Confirm first cycle (force a run, watch the log).
+ssh 149.118.69.221 '/home/ubuntu/email-health-watch.sh; tail ~/email-health-watch.log'
+```
 
 ## See also
 
