@@ -201,16 +201,24 @@ deploy_galaxy() {
     # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml).
     local GALAXY_SRC="$HOME/git/orgs/imagineering/galaxy"
 
-    if [ ! -f "$GALAXY_SRC/index.html" ]; then
-        echo "ERROR: galaxy source not found at $GALAXY_SRC"
+    # Preflight before a --delete sync: require BOTH the shell and an inner
+    # module, so a wrong/sparse/accidental dir holding only index.html can't
+    # pass the gate and wipe ~/apps/galaxy (cage-match #92, Carnot).
+    if [ ! -f "$GALAXY_SRC/index.html" ] || [ ! -f "$GALAXY_SRC/src/main.js" ]; then
+        echo "ERROR: galaxy source incomplete at $GALAXY_SRC (need index.html + src/main.js)"
         echo "Clone it first: git clone git@github.com:imagineering-cc/galaxy.git $GALAXY_SRC"
         return 1
     fi
 
     echo "Deploying galaxy.imagineering.cc..."
     ssh "$REMOTE" "mkdir -p ~/apps/galaxy"
-    # --exclude '.git': GALAXY_SRC is now a git repo; never publish .git/ to the web.
-    rsync -avz --delete --exclude '.git' --exclude '.gitignore' --exclude 'README.md' \
+    # Publishing to the public web is an ALLOWLIST boundary, not a denylist:
+    # GALAXY_SRC is a git working tree, so exclude ALL dotfiles ('.*' catches
+    # .git, .gitignore, a stray .env, .vscode, .github, .DS_Store — present and
+    # future) plus the repo's README. rsync matches '.*' on basename at any
+    # depth, so nested dot-dirs are covered too. (cage-match #92: Maxwell +
+    # Kelvin + Carnot — a denylist on a public-publish boundary is wrong polarity.)
+    rsync -avz --delete --exclude '.*' --exclude 'README.md' \
         "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
     echo "Galaxy deployed to ~/apps/galaxy (mounted into Caddy as /srv/galaxy)"
 }
