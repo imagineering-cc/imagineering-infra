@@ -190,24 +190,28 @@ deploy_invite() {
 
 deploy_galaxy() {
     # Mautrix Galaxy — a standalone three.js teaching world (spherical gravity,
-    # planets = bridge platforms) served at galaxy.imagineering.cc. Self-contained
-    # single HTML file; the only runtime dependency is three.js from a CDN.
-    # Source lives in this repo (galaxy/index.html), recovered from the retired
-    # Bridgekeeper's Primer game so it can be shared on its own.
+    # planets = bridge platforms) served at galaxy.imagineering.cc. Buildless
+    # ES-module static site; three.js loads from a CDN via an import map.
+    #
+    # Source now lives in its OWN repo (imagineering-cc/galaxy), cloned at
+    # ~/git/orgs/imagineering/galaxy — same EDF_SRC-style convention as
+    # embodied-dreamfinder. Split out of this repo 2026-06-21.
     #
     # Destination is ~/apps/galaxy — the Caddy container bind-mounts
-    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml),
-    # same convention as the invite mount.
-    local GALAXY_SRC="$REPO_ROOT/galaxy"
+    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml).
+    local GALAXY_SRC="$HOME/git/orgs/imagineering/galaxy"
 
     if [ ! -f "$GALAXY_SRC/index.html" ]; then
-        echo "ERROR: galaxy/index.html not found at $GALAXY_SRC"
+        echo "ERROR: galaxy source not found at $GALAXY_SRC"
+        echo "Clone it first: git clone git@github.com:imagineering-cc/galaxy.git $GALAXY_SRC"
         return 1
     fi
 
     echo "Deploying galaxy.imagineering.cc..."
     ssh "$REMOTE" "mkdir -p ~/apps/galaxy"
-    rsync -avz --delete "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
+    # --exclude '.git': GALAXY_SRC is now a git repo; never publish .git/ to the web.
+    rsync -avz --delete --exclude '.git' --exclude '.gitignore' --exclude 'README.md' \
+        "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
     echo "Galaxy deployed to ~/apps/galaxy (mounted into Caddy as /srv/galaxy)"
 }
 
