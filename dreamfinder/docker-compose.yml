@@ -9,7 +9,7 @@ services:
     networks:
       - imagineering
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - MATRIX_HOMESERVER=${MATRIX_HOMESERVER:-https://matrix.imagineering.cc}
       - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
       - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
