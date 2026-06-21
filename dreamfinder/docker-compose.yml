@@ -56,6 +56,12 @@ services:
       - CALENDAR_URL=${CALENDAR_URL:-}
       - EVENT_TIMEZONE=${EVENT_TIMEZONE:-}
       - DEPLOY_ANNOUNCE_GROUP_ID=${DEPLOY_ANNOUNCE_GROUP_ID:-}
+      # Matrix portal room for the Imagineering Telegram group. When set, River
+      # posts the weekly "session starts in 5 minutes" reminder there every
+      # Saturday 14:55 Australia/Melbourne (venue alternates online/in-person).
+      # Empty until River's Telegram account (+61461488770) joins the group and
+      # the mautrix-telegram bridge creates the portal room. See claude-tasks #23.
+      - EVENT_REMINDER_ROOM_ID=${EVENT_REMINDER_ROOM_ID:-}
       - HEALTH_PORT=8081
     volumes:
       - bot_data:/app/data
