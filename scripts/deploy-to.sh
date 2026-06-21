@@ -645,7 +645,7 @@ deploy_pm_bot() {
     pm_bot_field() { echo "$PM_BOT_PLAINTEXT" | yq -r "$1 // \"\""; }
     {
         echo "# Dreamfinder Configuration (auto-generated from secrets.yaml)"
-        printf 'ANTHROPIC_API_KEY=%s\n'           "$(dotenv_quote "$(pm_bot_field '.anthropic_api_key')")"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'           "$(dotenv_quote "$(pm_bot_field '.claude_code_oauth_token')")"
         printf 'MATRIX_HOMESERVER=%s\n'           "$(dotenv_quote "$(pm_bot_field '.matrix_homeserver')")"
         printf 'MATRIX_ACCESS_TOKEN=%s\n'         "$(dotenv_quote "$(pm_bot_field '.matrix_access_token')")"
         printf 'KAN_BASE_URL=%s\n'                "$(dotenv_quote "$(pm_bot_field '.kan_base_url')")"
@@ -728,7 +728,7 @@ deploy_embodied_dreamfinder() {
         printf 'AUTH_PASSWORD=%s\n'         "$(dotenv_quote "$(edf_field '.auth_password')")"
         printf 'AUTH_SECRET=%s\n'           "$(dotenv_quote "$(edf_field '.auth_secret')")"
         printf 'OPENAI_API_KEY=%s\n'        "$(dotenv_quote "$(edf_field '.openai_api_key')")"
-        printf 'ANTHROPIC_API_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.anthropic_api_key')")"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'     "$(dotenv_quote "$(edf_field '.claude_code_oauth_token')")"
         printf 'VOICE_MODE=%s\n'            "$(dotenv_quote "$(edf_field '.voice_mode' 'realtime')")"
         printf 'OUTLINE_API_KEY=%s\n'       "$(dotenv_quote "$(edf_field '.outline_api_key')")"
         printf 'RADICALE_CALENDAR_URL=%s\n' "$(dotenv_quote "$(edf_field '.radicale_calendar_url')")"
@@ -874,7 +874,7 @@ deploy_tech_world_bots() {
         printf 'LIVEKIT_URL=%s\n'        "$(dotenv_quote "$(twb_field '.livekit_url')")"
         printf 'LIVEKIT_API_KEY=%s\n'    "$(dotenv_quote "$(twb_field '.livekit_api_key')")"
         printf 'LIVEKIT_API_SECRET=%s\n' "$(dotenv_quote "$(twb_field '.livekit_api_secret')")"
-        printf 'ANTHROPIC_API_KEY=%s\n'  "$(dotenv_quote "$(twb_field '.anthropic_api_key')")"
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'  "$(dotenv_quote "$(twb_field '.claude_code_oauth_token')")"
         printf 'OPENAI_API_KEY=%s\n'     "$(dotenv_quote "$(twb_field '.openai_api_key')")"
         printf 'KAN_BASE_URL=%s\n'       "$(dotenv_quote "$(twb_field '.kan_base_url')")"
         printf 'KAN_API_KEY=%s\n'        "$(dotenv_quote "$(twb_field '.kan_api_key')")"

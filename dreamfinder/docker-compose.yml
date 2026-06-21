@@ -9,7 +9,7 @@ services:
     networks:
       - imagineering
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - MATRIX_HOMESERVER=${MATRIX_HOMESERVER:-https://matrix.imagineering.cc}
       - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
       - KAN_BASE_URL=${KAN_BASE_URL:-https://kan.imagineering.cc/api/v1}
@@ -56,6 +56,13 @@ services:
       - CALENDAR_URL=${CALENDAR_URL:-}
       - EVENT_TIMEZONE=${EVENT_TIMEZONE:-}
       - DEPLOY_ANNOUNCE_GROUP_ID=${DEPLOY_ANNOUNCE_GROUP_ID:-}
+      # Room River posts the weekly "session starts in 5 minutes" reminder to,
+      # every Saturday 14:55 Australia/Melbourne (venue alternates online vs
+      # in-person). Default is the #imagineering Matrix hub: River posts there
+      # and the matrix-chat-superbridge fans it out to every platform group
+      # (Telegram, Signal, WhatsApp, Discord) — River needs no per-platform
+      # membership. See claude-tasks #23.
+      - EVENT_REMINDER_ROOM_ID=${EVENT_REMINDER_ROOM_ID:-!SNO2v77SDkrFKxUGFw:imagineering.cc}
       - HEALTH_PORT=8081
     volumes:
       - bot_data:/app/data

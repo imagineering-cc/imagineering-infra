@@ -28,7 +28,7 @@ services:
       - AVATAR_STREAM_ENABLED=true
       - PORT=3000
       - VOICE_MODE=${VOICE_MODE:-realtime}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       # lyra-live brain: route the voice LLM stage to the REAL Lyra container on
       # robins-oci via ssh+docker exec. Dark by default (api); set DF_BRAIN=lyra-live
       # in .env to activate, with TTS_ENGINE=openai for her 'sage' voice. The ssh
