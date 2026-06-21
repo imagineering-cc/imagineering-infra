@@ -950,6 +950,12 @@ deploy_matrix() {
         return 1
     fi
 
+    # Ensure the aiko-chat-bridge submodule is checked out before rsync ships
+    # matrix/ to the host. Without this, an uninitialized submodule ships an
+    # EMPTY matrix/aiko-chat-bridge/ and the host's `build: ./aiko-chat-bridge`
+    # fails (no Dockerfile). Mirrors deploy_pm_bot's `git submodule update --init`.
+    (cd "$REPO_ROOT" && git submodule update --init matrix/aiko-chat-bridge)
+
     # Generate .env from encrypted secrets. Decrypt once, then route every value
     # through dotenv_quote so a secret with dotenv-significant bytes survives
     # docker compose's dotenv parser intact (see deploy_outline for rationale).
@@ -973,9 +979,21 @@ deploy_matrix() {
         printf 'HF_HUB_ROOM_ID=%s\n'       "$(dotenv_quote "$(matrix_field '.hf_hub_room_id')")"
     } > "$REPO_ROOT/matrix/.env"
 
-    # Deploy files
+    # Deploy files.
+    # CRITICAL: aiko-bridge-data/ holds the live aiko bridge's server-side state
+    # (config.yaml + aiko-bridge.db, generated/registered once per the bridge
+    # README). It is gitignored, so it never exists in this source tree -- which
+    # means a bare `rsync --delete` would treat it as extraneous and WIPE the
+    # host copy, destroying the bridge registration + DB. Exclude it so --delete
+    # leaves it untouched. Also exclude .git (submodule gitlink) so the host
+    # gets a clean source tree, matching deploy_pm_bot's rsync.
     ssh "$REMOTE" "mkdir -p ~/apps/matrix"
-    rsync -avz --delete --exclude 'secrets.yaml' --exclude 'secrets.yaml.example' "$REPO_ROOT/matrix/" "$REMOTE":~/apps/matrix/
+    rsync -avz --delete \
+        --exclude 'secrets.yaml' \
+        --exclude 'secrets.yaml.example' \
+        --exclude 'aiko-bridge-data/' \
+        --exclude '.git' \
+        "$REPO_ROOT/matrix/" "$REMOTE":~/apps/matrix/
 
     # Copy relay bot source from matrix repo
     rsync -avz --delete \
