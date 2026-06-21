@@ -100,7 +100,7 @@ services:
       - continuwuity
 
   # --- aiko-bridge: Matrix <-> aiko_chat (Aiko Services / MQTT) -------------
-  # Source is the matrix/aiko-bridge submodule (github.com/nickmeinhold/aiko-bridge).
+  # Source is the matrix/aiko-bridge submodule (github.com/nickmeinhold/aiko-chat-bridge).
   # Config + registration + db live server-side in ./aiko-bridge-data (gitignored),
   # generated/registered once per the bridge README (like the other mautrix bridges).
   aiko-mosquitto:

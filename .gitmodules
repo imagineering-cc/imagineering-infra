@@ -1,3 +1,3 @@
 [submodule "matrix/aiko-bridge"]
 	path = matrix/aiko-bridge
-	url = git@github.com:nickmeinhold/aiko-bridge.git
+	url = git@github.com:nickmeinhold/aiko-chat-bridge.git
