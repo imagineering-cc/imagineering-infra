@@ -190,24 +190,36 @@ deploy_invite() {
 
 deploy_galaxy() {
     # Mautrix Galaxy — a standalone three.js teaching world (spherical gravity,
-    # planets = bridge platforms) served at galaxy.imagineering.cc. Self-contained
-    # single HTML file; the only runtime dependency is three.js from a CDN.
-    # Source lives in this repo (galaxy/index.html), recovered from the retired
-    # Bridgekeeper's Primer game so it can be shared on its own.
+    # planets = bridge platforms) served at galaxy.imagineering.cc. Buildless
+    # ES-module static site; three.js loads from a CDN via an import map.
+    #
+    # Source now lives in its OWN repo (imagineering-cc/galaxy), cloned at
+    # ~/git/orgs/imagineering/galaxy — same EDF_SRC-style convention as
+    # embodied-dreamfinder. Split out of this repo 2026-06-21.
     #
     # Destination is ~/apps/galaxy — the Caddy container bind-mounts
-    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml),
-    # same convention as the invite mount.
-    local GALAXY_SRC="$REPO_ROOT/galaxy"
+    # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml).
+    local GALAXY_SRC="$HOME/git/orgs/imagineering/galaxy"
 
-    if [ ! -f "$GALAXY_SRC/index.html" ]; then
-        echo "ERROR: galaxy/index.html not found at $GALAXY_SRC"
+    # Preflight before a --delete sync: require BOTH the shell and an inner
+    # module, so a wrong/sparse/accidental dir holding only index.html can't
+    # pass the gate and wipe ~/apps/galaxy (cage-match #92, Carnot).
+    if [ ! -f "$GALAXY_SRC/index.html" ] || [ ! -f "$GALAXY_SRC/src/main.js" ]; then
+        echo "ERROR: galaxy source incomplete at $GALAXY_SRC (need index.html + src/main.js)"
+        echo "Clone it first: git clone git@github.com:imagineering-cc/galaxy.git $GALAXY_SRC"
         return 1
     fi
 
     echo "Deploying galaxy.imagineering.cc..."
     ssh "$REMOTE" "mkdir -p ~/apps/galaxy"
-    rsync -avz --delete "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
+    # Publishing to the public web is an ALLOWLIST boundary, not a denylist:
+    # GALAXY_SRC is a git working tree, so exclude ALL dotfiles ('.*' catches
+    # .git, .gitignore, a stray .env, .vscode, .github, .DS_Store — present and
+    # future) plus the repo's README. rsync matches '.*' on basename at any
+    # depth, so nested dot-dirs are covered too. (cage-match #92: Maxwell +
+    # Kelvin + Carnot — a denylist on a public-publish boundary is wrong polarity.)
+    rsync -avz --delete --exclude '.*' --exclude 'README.md' \
+        "$GALAXY_SRC/" "$REMOTE":apps/galaxy/
     echo "Galaxy deployed to ~/apps/galaxy (mounted into Caddy as /srv/galaxy)"
 }
 
