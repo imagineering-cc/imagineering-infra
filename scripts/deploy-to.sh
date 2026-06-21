@@ -1006,9 +1006,21 @@ deploy_matrix() {
     # Clean up local .env
     rm -f "$REPO_ROOT/matrix/.env"
 
-    # Build relay bots and start all services (relay-bot + relay-bot-hf
-    # share the ./relay build context, so this does both efficiently)
-    ssh "$REMOTE" "cd ~/apps/matrix && docker compose pull && DOCKER_BUILDKIT=1 docker compose build relay-bot relay-bot-hf && docker compose up -d"
+    # Pull external images, build ALL build-context services, then start.
+    #
+    # pull: refreshes the registry-backed :latest images (continuwuity, the
+    #   mautrix bridges, mosquitto). --ignore-pull-failures is REQUIRED: aiko-chat
+    #   and aiko-bridge declare `image: aiko-bridge:latest` with no `build:` key,
+    #   so compose tries to PULL that locally-built image from a registry and
+    #   fails ("authorization failed"); without the flag that aborts the whole
+    #   chain. The image is produced by the build step below, not a registry.
+    # build --pull: must build EVERY `build:` service, not just the relay bots --
+    #   aiko-registrar builds `./aiko-chat-bridge` -> aiko-bridge:latest, which
+    #   aiko-chat/aiko-bridge consume. Naming only relay-bot/relay-bot-hf meant
+    #   `up -d` reused the stale pre-existing aiko-bridge:latest and silently
+    #   skipped the renamed build context. Mirrors the other deploys (deploy_pm_bot).
+    # up -d: recreates any container whose image changed.
+    ssh "$REMOTE" "cd ~/apps/matrix && docker compose pull --ignore-pull-failures && DOCKER_BUILDKIT=1 docker compose build --pull && docker compose up -d"
 
     echo "Matrix deployed!"
     echo "  URL: https://matrix.imagineering.cc"
