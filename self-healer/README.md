@@ -87,12 +87,47 @@ real prod signals before any hands are wired. In order:
 
 1. **v1:** sensor → diagnose → read-only verdict. ✅
 2. **amber ping:** notify on amber+ via the `notify` proxy. ✅ (still read-only)
-3. **green draft:** on a confident green finding, draft a fix PR (no merge).
+3. **green draft:** file a remediation *issue* for a confident-green finding. ✅
+   (the first ACTION stage — bounded blast radius: issue, never code/merge/deploy)
 4. **green auto:** behind an explicit flag, run the full green-tier loop
    (fix → cage-match → merge → deploy → re-sense to confirm the symptom is gone).
 
 Each step is gated on the previous one being *observed correct in prod*, not
 just coded. The cage is built before the monster.
+
+### green-draft (the first action stage)
+
+When a finding is **confident green with a concrete proposedAction**, the healer
+files a remediation issue in that container's source repo. This is the smallest
+real outward action with bounded blast radius — it files an **issue**, never
+code; it never opens a PR, merges, or deploys.
+
+- **OFF by default.** Set `HEALER_DRAFT_ISSUES=1` to enable. The action stage
+  exists but must be explicitly switched on.
+- **No shell.** Issues are created via the GitHub API (`fetch` + token), so
+  there's none of the command-injection surface a `gh` shell-out would add.
+  Token from `HEALER_GH_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`); needs `issues:write`.
+- **Reconcile-before-mutate dedup, fail-CLOSED.** Before filing, it lists the
+  repo's open `self-healer` issues (paginated) and checks for the finding's
+  fingerprint marker (`<!-- self-healer-fp: … -->`). If that read *fails* (403,
+  rate-limit, 5xx), it does **not** file — for a write stage, "can't confirm
+  it's not a duplicate" means don't write. Container→repo map in `repos.mjs`; an
+  unmapped container is skipped, never guessed.
+- **Content-safe.** All issue text is scrubbed (`scrubSecrets`), length-capped,
+  and @mentions are neutralized so attacker-influenced log content can't leak a
+  secret, ping people, or run unbounded.
+
+> ⚠️ **Dedup is best-effort, not exclusive.** It reduces duplicates but does not
+> *guarantee* their absence: GitHub's List Issues API is eventually-consistent
+> (a few seconds of read-after-write lag, verified live), and the check-then-
+> create sequence has no atomic lock. For a minutes-spaced cron this is robust;
+> two near-simultaneous runs could double-file. A real single-writer/lock is a
+> prerequisite before any higher-stakes action stage (e.g. auto-merge) reuses
+> this pattern.
+
+> The **auto-code-writing PR** (an LLM patching source from a log diagnosis) is
+> the real "monster" — a prompt-injection-into-codegen surface — and is a
+> deliberately separate, cage-built step. green-draft is its safe precursor.
 
 ### amber-ping
 

@@ -17,6 +17,7 @@ import { diagnose } from './diagnose.mjs';
 import { isOnBox } from './host.mjs';
 import { tierExitCode } from './tiers.mjs';
 import { pingIfNoteworthy } from './notify.mjs';
+import { draftIfActionable } from './draft.mjs';
 
 /**
  * Load + validate the watch list. Fails CLOSED on a malformed config so a bad
@@ -108,6 +109,18 @@ async function main() {
     process.stderr.write(pinged ? '[healer] amber-ping sent.\n' : `[healer] no ping (${reason}).\n`);
   } catch (err) {
     process.stderr.write(`[healer] amber-ping FAILED (verdict still stands): ${err.message}\n`);
+  }
+
+  // green-draft: file a remediation ISSUE for confident-green actionable
+  // findings. OFF by default (HEALER_DRAFT_ISSUES=1). Never code/merge/deploy.
+  // Like the ping, a failure here must not change the diagnostic exit code.
+  try {
+    const outcomes = await draftIfActionable(verdict);
+    for (const o of outcomes) {
+      process.stderr.write(`[healer] draft ${o.action}: ${o.container}${o.url ? ` → ${o.url}` : ''}${o.detail ? ` (${o.detail})` : ''}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`[healer] green-draft FAILED (verdict still stands): ${err.message}\n`);
   }
 
   // Exit code communicates tier to a cron/monitor without parsing JSON.
