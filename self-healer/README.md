@@ -107,16 +107,23 @@ code; it never opens a PR, merges, or deploys.
 - **No shell.** Issues are created via the GitHub API (`fetch` + token), so
   there's none of the command-injection surface a `gh` shell-out would add.
   Token from `HEALER_GH_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`); needs `issues:write`.
-- **Source-of-truth dedup.** Before filing, it lists the repo's open
-  `self-healer` issues and checks for the finding's fingerprint marker
-  (`<!-- self-healer-fp: … -->`) — reconcile-before-mutate, so a cron can't mint
-  duplicates. Container→repo map in `repos.mjs`; an unmapped container is skipped.
-- **Scrubbed.** All issue text goes through `scrubSecrets`.
+- **Reconcile-before-mutate dedup, fail-CLOSED.** Before filing, it lists the
+  repo's open `self-healer` issues (paginated) and checks for the finding's
+  fingerprint marker (`<!-- self-healer-fp: … -->`). If that read *fails* (403,
+  rate-limit, 5xx), it does **not** file — for a write stage, "can't confirm
+  it's not a duplicate" means don't write. Container→repo map in `repos.mjs`; an
+  unmapped container is skipped, never guessed.
+- **Content-safe.** All issue text is scrubbed (`scrubSecrets`), length-capped,
+  and @mentions are neutralized so attacker-influenced log content can't leak a
+  secret, ping people, or run unbounded.
 
-> ⚠️ **Dedup is eventually-consistent.** GitHub's List Issues API has a few
-> seconds of read-after-write lag (verified live). For a minutes-spaced cron
-> this is robust; two near-simultaneous runs have a narrow double-file window.
-> Keep the run interval well above the lag.
+> ⚠️ **Dedup is best-effort, not exclusive.** It reduces duplicates but does not
+> *guarantee* their absence: GitHub's List Issues API is eventually-consistent
+> (a few seconds of read-after-write lag, verified live), and the check-then-
+> create sequence has no atomic lock. For a minutes-spaced cron this is robust;
+> two near-simultaneous runs could double-file. A real single-writer/lock is a
+> prerequisite before any higher-stakes action stage (e.g. auto-merge) reuses
+> this pattern.
 
 > The **auto-code-writing PR** (an LLM patching source from a log diagnosis) is
 > the real "monster" — a prompt-injection-into-codegen surface — and is a

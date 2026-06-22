@@ -54,6 +54,33 @@ test('actionableFindings: only confident-green with a concrete action', () => {
   assert.equal(out[0].container, 'a');
 });
 
+test('actionableFindings: normalizes the none-check (" None ", empty excluded)', () => {
+  const v = { findings: [
+    { container: 'a', tier: 'green', confidence: 'high', proposedAction: ' None ' }, // ✗ normalized none
+    { container: 'b', tier: 'green', confidence: 'high', proposedAction: '   ' },      // ✗ empty
+    { container: 'c', tier: 'green', confidence: 'high', proposedAction: 'patch it' }, // ✓
+  ] };
+  const out = actionableFindings(v);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].container, 'c');
+});
+
+test('buildIssue: neutralizes @mentions and caps long fields', () => {
+  const { body } = buildIssue({
+    container: 'tw-clawd', tier: 'green', confidence: 'high', signature: 'sig',
+    diagnosis: 'cc @nickmeinhold and @everyone ' + 'word '.repeat(400), // spaced so the high-entropy scrubber doesn't collapse it
+    evidence: 'e', proposedAction: 'fix',
+  });
+  assert.doesNotMatch(body, /@nickmeinhold/);  // mention neutralized (zero-width inserted after @)
+  assert.doesNotMatch(body, /@everyone/);
+  assert.match(body, /…\(truncated\)/);          // long diagnosis capped
+});
+
+test('findingFingerprint: 32 hex chars (128-bit, collision-resistant)', () => {
+  const fp = findingFingerprint({ container: 'a', tier: 'green', signature: 's' });
+  assert.match(fp, /^[0-9a-f]{32}$/);
+});
+
 test('draftIfActionable: OFF by default (no network, no env)', async () => {
   const saved = process.env.HEALER_DRAFT_ISSUES;
   delete process.env.HEALER_DRAFT_ISSUES;
