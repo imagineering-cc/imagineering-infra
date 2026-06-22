@@ -12,9 +12,32 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { gatherSignals } from './sensor.mjs';
+import { gatherSignals, assertValidContainerName } from './sensor.mjs';
 import { diagnose } from './diagnose.mjs';
 import { isOnBox } from './host.mjs';
+import { tierExitCode } from './tiers.mjs';
+
+/**
+ * Load + validate the watch list. Fails CLOSED on a malformed config so a bad
+ * targets file is caught at load — before any host command is built from it —
+ * rather than crashing cryptically mid-run (cage-match PR #100).
+ */
+async function loadTargets(path) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(path, 'utf8'));
+  } catch (e) {
+    throw new Error(`could not read/parse targets file ${path}: ${e.message}`);
+  }
+  if (!parsed || !Array.isArray(parsed.targets) || parsed.targets.length === 0) {
+    throw new Error(`targets file ${path} must contain a non-empty "targets" array`);
+  }
+  for (const t of parsed.targets) {
+    if (!t || typeof t.name !== 'string') throw new Error(`each target needs a string "name": ${JSON.stringify(t)}`);
+    assertValidContainerName(t.name);
+  }
+  return parsed.targets;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -60,7 +83,7 @@ function render(verdict, signals) {
 
 async function main() {
   const targetsPath = process.env.HEALER_TARGETS || join(HERE, '..', 'targets.json');
-  const { targets } = JSON.parse(await readFile(targetsPath, 'utf8'));
+  const targets = await loadTargets(targetsPath);
 
   const mode = isOnBox() ? 'on-box' : `remote via ${process.env.HEALER_HOST}`;
   process.stderr.write(`[healer] sensing ${targets.length} containers (${mode})…\n`);
@@ -76,8 +99,8 @@ async function main() {
   process.stdout.write(JSON.stringify({ ...verdict, sampledAt: new Date().toISOString(), signals }, null, 2) + '\n');
 
   // Exit code communicates tier to a cron/monitor without parsing JSON.
-  process.exitCode = verdict.overallTier === 'red' ? 2
-    : verdict.overallTier === 'amber' ? 1 : 0;
+  // verdict.overallTier is already validated to the closed set in diagnose().
+  process.exitCode = tierExitCode(verdict.overallTier);
 }
 
 main().catch((err) => {

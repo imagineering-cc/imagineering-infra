@@ -18,13 +18,31 @@
 import { runOnHost } from './host.mjs';
 
 /**
+ * Legal Docker container-name grammar. Container names are interpolated into a
+ * shell command, so they are a command-injection surface (cage-match PR #100).
+ * targets.json is trusted config, but validating here makes the trust boundary
+ * EXPLICIT instead of assumed — a name with a space, `;`, `$()` etc. is
+ * rejected at load before any command string is built. Mirrors Docker's own
+ * `[a-zA-Z0-9][a-zA-Z0-9_.-]+` name rule.
+ */
+export const CONTAINER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+/** Throw if a container name isn't shell-inert per the Docker grammar. */
+export function assertValidContainerName(name) {
+  if (typeof name !== 'string' || !CONTAINER_NAME_RE.test(name)) {
+    throw new Error(`invalid container name (must match ${CONTAINER_NAME_RE}): ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+/**
  * Collapse runs of identical consecutive log lines into `<line>  (×N)`.
  * This is not just a size hack: a line repeated 25× carries no MORE diagnostic
  * detail than the line plus its count, but it does waste inference tokens and
  * latency. Collapsing surfaces the repetition AS a signal while shrinking the
  * payload — e.g. "OpenAI Realtime mode ready  (×25)".
  */
-function collapseRepeats(text) {
+export function collapseRepeats(text) {
   const out = [];
   let prev = null;
   let run = 0;
@@ -58,16 +76,28 @@ function collapseRepeats(text) {
  * @returns {Promise<ContainerSignal>}
  */
 async function gatherContainer(name, logLines) {
+  assertValidContainerName(name);
   // One combined call keeps SSH round-trips down: inspect (status+restarts)
-  // then logs, separated by a sentinel we split on.
+  // then logs, separated by a sentinel. We split on the FIRST occurrence only
+  // (indexOf, not String.split) so a log line that happens to contain the
+  // sentinel text can't corrupt the meta/logs boundary (cage-match PR #100).
   const SENTINEL = '@@HEALER_SPLIT@@';
   const cmd =
-    `docker inspect ${name} --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>/dev/null; ` +
+    `docker inspect '${name}' --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>/dev/null; ` +
     `echo '${SENTINEL}'; ` +
-    `docker logs ${name} --tail ${logLines} 2>&1`;
+    `docker logs '${name}' --tail ${logLines} 2>&1`;
 
-  const { stdout } = await runOnHost(cmd);
-  const [meta, logs = ''] = stdout.split(SENTINEL);
+  const { stdout, stderr, code } = await runOnHost(cmd);
+  // ssh returns 255 when the connection itself fails (host down, auth, etc.).
+  // That is a SENSING failure, not a container verdict — fail CLOSED by
+  // throwing rather than reporting the container as absent/healthy.
+  if (code === 255) {
+    throw new Error(`host unreachable while sensing ${name} (ssh exit 255): ${stderr.trim()}`);
+  }
+
+  const splitAt = stdout.indexOf(SENTINEL);
+  const meta = splitAt === -1 ? stdout : stdout.slice(0, splitAt);
+  const logs = splitAt === -1 ? '' : stdout.slice(splitAt + SENTINEL.length);
   const metaLine = meta.trim();
 
   if (!metaLine) {

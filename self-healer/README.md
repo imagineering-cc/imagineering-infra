@@ -94,6 +94,31 @@ real prod signals before any hands are wired. In order:
 Each step is gated on the previous one being *observed correct in prod*, not
 just coded. The cage is built before the monster.
 
+## Security posture (v1)
+
+"Read-only intent" is not "harmless" — command injection on the prod host is
+RCE regardless of what the tool is *for*. The cage-match (PR #100) hardened the
+string boundaries:
+
+- **Shell interpolation is validated, not assumed.** The only values that reach
+  a shell string are container names (allowlisted to Docker's
+  `[a-zA-Z0-9][a-zA-Z0-9_.-]*` grammar at config load) and `SHIM_URL` (parsed +
+  required to be a loopback `http://` URL). The big JSON body goes via stdin,
+  never the command line.
+- **The verdict fails CLOSED.** Tiers are a validated closed set; `overallTier`
+  is *derived* from the per-finding tiers, not trusted from the model. An
+  off-set or missing tier throws (exit 3) rather than silently becoming green.
+- **Log content is framed as untrusted data** to the brain (prompt-injection),
+  and the code-side schema validation means the model cannot redefine the
+  contract even if a log line tries to. This framing is the *gate* on the
+  green-auto roadmap step: the action stage must never treat the LLM verdict as
+  authority without an independent guardrail.
+
+Residual (named tradeoff): the remote path still composes a command string run
+through the SSH login shell. With the two interpolation points validated this
+is closed for v1's inputs; a fully typed argv primitive (`ssh host -- bash -s`
+with data on a separate channel) is the v2 hardening if the input set grows.
+
 ## Known substrate facts (2026-06-22)
 
 - `claude-shim` lives at `~/apps/claude-shim` **on OCI only** — not checked in
