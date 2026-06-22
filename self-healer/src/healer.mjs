@@ -16,6 +16,7 @@ import { gatherSignals, assertValidContainerName } from './sensor.mjs';
 import { diagnose } from './diagnose.mjs';
 import { isOnBox } from './host.mjs';
 import { tierExitCode } from './tiers.mjs';
+import { pingIfNoteworthy } from './notify.mjs';
 
 /**
  * Load + validate the watch list. Fails CLOSED on a malformed config so a bad
@@ -97,6 +98,17 @@ async function main() {
   // healer can be piped into the (future) action stage or a monitor.
   process.stderr.write(render(verdict, signals));
   process.stdout.write(JSON.stringify({ ...verdict, sampledAt: new Date().toISOString(), signals }, null, 2) + '\n');
+
+  // amber-ping: notify Nick via the `notify` proxy when the verdict is amber
+  // or red. Green and unconfigured (no NOTIFY_API_KEY) environments are silent.
+  // A ping FAILURE must not change the diagnostic exit code (the verdict stands
+  // either way) — surface it on stderr and carry on.
+  try {
+    const { pinged, reason } = await pingIfNoteworthy(verdict);
+    process.stderr.write(pinged ? '[healer] amber-ping sent.\n' : `[healer] no ping (${reason}).\n`);
+  } catch (err) {
+    process.stderr.write(`[healer] amber-ping FAILED (verdict still stands): ${err.message}\n`);
+  }
 
   // Exit code communicates tier to a cron/monitor without parsing JSON.
   // verdict.overallTier is already validated to the closed set in diagnose().

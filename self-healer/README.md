@@ -85,14 +85,37 @@ is told: when unsure, pick the higher tier and lower confidence.
 v1 stops at the verdict on purpose — the classifier must earn trust against
 real prod signals before any hands are wired. In order:
 
-1. **v1 (this):** sensor → diagnose → read-only verdict. ✅
-2. **amber ping:** post the verdict to a channel (Telegram/Discord) on amber+.
+1. **v1:** sensor → diagnose → read-only verdict. ✅
+2. **amber ping:** notify on amber+ via the `notify` proxy. ✅ (still read-only)
 3. **green draft:** on a confident green finding, draft a fix PR (no merge).
 4. **green auto:** behind an explicit flag, run the full green-tier loop
    (fix → cage-match → merge → deploy → re-sense to confirm the symptom is gone).
 
 Each step is gated on the previous one being *observed correct in prod*, not
 just coded. The cage is built before the monster.
+
+### amber-ping
+
+When a verdict is amber or red, the healer sends Nick a Telegram message. It
+does **not** hold a bot token or build a Telegram path — it POSTs to the
+existing `notify` proxy (`https://notify.imagineering.cc/send`, a public HTTPS
+endpoint), so this is a plain `fetch` with no shell/SSH surface.
+
+- **Still read-only.** A ping is a notification, not a remediation.
+- **Secrets are scrubbed** from the message (`scrubSecrets`) — the model's
+  diagnosis could quote a log line containing a credential. Only verdict fields
+  (summary + findings) are sent; never the raw `signals`/log tails. Dynamic text
+  is HTML-escaped so it can't break or inject the Telegram markup.
+- **Silent when it should be:** green verdicts and environments without a
+  `NOTIFY_API_KEY` are no-ops, so a dev run never errors and a clean bill never
+  spams. Set `HEALER_NO_PING=1` to force-disable.
+- **Config:** `NOTIFY_API_KEY` (required to actually send), `NOTIFY_URL`
+  (default the public proxy).
+
+> ⚠️ **KNOWN LIMITATION — stateless, no cooldown.** amber-ping has no dedup: a
+> persistently-amber signal would ping on *every* run. The healer isn't
+> scheduled yet, so this can't spam today — but a cooldown/dedup MUST be added
+> **before** wiring the cron. Tracked as a follow-up.
 
 ## Security posture (v1)
 

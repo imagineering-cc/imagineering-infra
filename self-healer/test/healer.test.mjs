@@ -9,6 +9,43 @@ import assert from 'node:assert/strict';
 import { normalizeTier, tierExitCode, maxTier, TIERS } from '../src/tiers.mjs';
 import { extractVerdict, validateVerdict } from '../src/diagnose.mjs';
 import { collapseRepeats, assertValidContainerName } from '../src/sensor.mjs';
+import { scrubSecrets, formatVerdict, pingIfNoteworthy } from '../src/notify.mjs';
+
+test('scrubSecrets: redacts known token shapes', () => {
+  assert.match(scrubSecrets('token sk-ant-oat01-abc123DEF_xyz here'), /<redacted:anthropic-key>/);
+  assert.match(scrubSecrets('ghs_AAAABBBBCCCCDDDD1111'), /<redacted:github-token>/);
+  assert.match(scrubSecrets('Authorization: Bearer abcdef1234567890'), /Bearer <redacted>/);
+  assert.equal(scrubSecrets('nothing secret here'), 'nothing secret here');
+});
+
+test('formatVerdict: HTML-escapes dynamic text and scrubs secrets', () => {
+  const msg = formatVerdict({
+    overallTier: 'amber',
+    summary: 'shim leaked sk-ant-oat01-SECRETvalue_here in <logs>',
+    findings: [{ container: 'c<1>', signature: 'sig & stuff', tier: 'amber', proposedAction: 'fix it' }],
+  });
+  assert.doesNotMatch(msg, /sk-ant-oat01-SECRETvalue/); // secret scrubbed
+  assert.match(msg, /&lt;logs&gt;/);                    // angle brackets escaped
+  assert.match(msg, /c&lt;1&gt;/);                       // finding container escaped
+  assert.match(msg, /sig &amp; stuff/);                  // ampersand escaped
+});
+
+test('pingIfNoteworthy: green is a silent no-op (no network)', async () => {
+  const r = await pingIfNoteworthy({ overallTier: 'green', findings: [] });
+  assert.equal(r.pinged, false);
+});
+
+test('pingIfNoteworthy: amber without a key is a no-op (no network)', async () => {
+  const saved = process.env.NOTIFY_API_KEY;
+  delete process.env.NOTIFY_API_KEY;
+  try {
+    const r = await pingIfNoteworthy({ overallTier: 'amber', summary: 'x', findings: [] });
+    assert.equal(r.pinged, false);
+    assert.match(r.reason, /NOTIFY_API_KEY/);
+  } finally {
+    if (saved !== undefined) process.env.NOTIFY_API_KEY = saved;
+  }
+});
 
 test('normalizeTier: trims + lowercases into the closed set', () => {
   assert.equal(normalizeTier('red'), 'red');
