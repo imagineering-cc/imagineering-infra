@@ -75,6 +75,24 @@ test('validateVerdict: fails CLOSED when findings is not an array', () => {
   assert.throws(() => validateVerdict({ findings: 'nope' }));
 });
 
+test('validateVerdict: throws on a present-but-invalid overallTier (fail closed on bad contract)', () => {
+  assert.throws(() => validateVerdict({ overallTier: 'redish', findings: [] }));
+});
+
+test('validateVerdict: tolerates an ABSENT overallTier by deriving it', () => {
+  assert.equal(validateVerdict({ findings: [] }).overallTier, 'green');
+  assert.equal(validateVerdict({ findings: [{ tier: 'amber' }] }).overallTier, 'amber');
+});
+
+test('validateVerdict: coerces malformed finding fields to safe defaults', () => {
+  const v = validateVerdict({ findings: [{ tier: 'green', selfRecovered: 'yes', diagnosis: 42 }] });
+  const f = v.findings[0];
+  assert.equal(f.container, '(unknown)');
+  assert.equal(f.proposedAction, 'none');
+  assert.equal(f.selfRecovered, false); // 'yes' (string) is not the boolean true
+  assert.equal(f.diagnosis, ''); // non-string coerced
+});
+
 test('collapseRepeats: folds identical runs into ×N, leaves singletons alone', () => {
   assert.equal(collapseRepeats('a\na\na\nb'), 'a  (×3)\nb');
   assert.equal(collapseRepeats('x\ny\nz'), 'x\ny\nz');

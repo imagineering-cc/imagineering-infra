@@ -77,41 +77,52 @@ export function collapseRepeats(text) {
  */
 async function gatherContainer(name, logLines) {
   assertValidContainerName(name);
-  // One combined call keeps SSH round-trips down: inspect (status+restarts)
-  // then logs, separated by a sentinel. We split on the FIRST occurrence only
-  // (indexOf, not String.split) so a log line that happens to contain the
-  // sentinel text can't corrupt the meta/logs boundary (cage-match PR #100).
+  // One combined call keeps SSH round-trips down. We capture docker inspect's
+  // OWN exit code so we can distinguish THREE cases (cage-match PR #100
+  // re-review): the container exists (rc 0), it's genuinely absent ("No such
+  // object", rc≠0), or docker/the host is unreachable (daemon down, perm
+  // denied, ssh fail) — the last MUST fail CLOSED, never look like "absent".
+  // Split on the FIRST sentinel occurrence (indexOf) so log content can't
+  // corrupt the meta/logs boundary.
   const SENTINEL = '@@HEALER_SPLIT@@';
   const cmd =
-    `docker inspect '${name}' --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>/dev/null; ` +
+    `__i=$(docker inspect '${name}' --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>&1); __rc=$?; ` +
+    `printf 'INSPECT_RC=%s\\n' "$__rc"; printf '%s\\n' "$__i"; ` +
     `echo '${SENTINEL}'; ` +
     `docker logs '${name}' --tail ${logLines} 2>&1`;
 
   const { stdout, stderr, code } = await runOnHost(cmd);
-  // ssh returns 255 when the connection itself fails (host down, auth, etc.).
-  // That is a SENSING failure, not a container verdict — fail CLOSED by
-  // throwing rather than reporting the container as absent/healthy.
+  // ssh returns 255 when the connection itself fails — a SENSING failure.
   if (code === 255) {
     throw new Error(`host unreachable while sensing ${name} (ssh exit 255): ${stderr.trim()}`);
   }
 
   const splitAt = stdout.indexOf(SENTINEL);
-  const meta = splitAt === -1 ? stdout : stdout.slice(0, splitAt);
+  const head = splitAt === -1 ? stdout : stdout.slice(0, splitAt);
   const logs = splitAt === -1 ? '' : stdout.slice(splitAt + SENTINEL.length);
-  const metaLine = meta.trim();
 
-  if (!metaLine) {
+  const headLines = head.split('\n');
+  const rcLine = headLines.find((l) => l.startsWith('INSPECT_RC=')) ?? '';
+  const inspectRc = rcLine.slice('INSPECT_RC='.length).trim();
+  const inspectOut = headLines.filter((l) => !l.startsWith('INSPECT_RC=')).join('\n').trim();
+
+  if (inspectRc === '0') {
+    const [state, restarts, running] = inspectOut.split('|');
+    return {
+      name,
+      present: true,
+      status: running === 'true' ? `running (${state})` : `NOT running (${state})`,
+      restartCount: Number.parseInt(restarts, 10) || 0,
+      logTail: collapseRepeats(logs.trim()),
+    };
+  }
+  // inspect failed. "No such object/container" is a genuine ABSENT verdict.
+  if (/no such (object|container)/i.test(inspectOut)) {
     return { name, present: false, status: 'absent', restartCount: 0, logTail: '' };
   }
-
-  const [state, restarts, running] = metaLine.split('|');
-  return {
-    name,
-    present: true,
-    status: running === 'true' ? `running (${state})` : `NOT running (${state})`,
-    restartCount: Number.parseInt(restarts, 10) || 0,
-    logTail: collapseRepeats(logs.trim()),
-  };
+  // Anything else (daemon down, permission denied, unparseable) is a SENSING
+  // failure — fail CLOSED so a broken host never masquerades as "all absent".
+  throw new Error(`docker inspect failed for ${name} (rc=${inspectRc || '?'}): ${inspectOut || stderr.trim() || '(no output)'}`);
 }
 
 /**

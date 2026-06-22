@@ -83,10 +83,23 @@ export function validateVerdict(v) {
   if (!v || typeof v !== 'object') throw new Error('verdict is not an object');
   if (!Array.isArray(v.findings)) throw new Error('verdict.findings is not an array');
 
+  // Coerce every rendered field to a safe type so a malformed finding can't
+  // emit "undefined" or leak a non-string into the report (cage-match PR #100
+  // re-review). tier is the only field that throws — it drives the exit code.
+  const str = (x, d = '') => (typeof x === 'string' ? x : d);
   const findings = v.findings.map((f, i) => {
     const tier = normalizeTier(f?.tier);
     if (!tier) throw new Error(`finding[${i}].tier is not a valid tier: ${JSON.stringify(f?.tier)}`);
-    return { ...f, tier };
+    return {
+      container: str(f?.container, '(unknown)'),
+      signature: str(f?.signature, '(unspecified)'),
+      tier,
+      selfRecovered: f?.selfRecovered === true,
+      confidence: str(f?.confidence, 'low'),
+      diagnosis: str(f?.diagnosis),
+      evidence: str(f?.evidence),
+      proposedAction: str(f?.proposedAction, 'none'),
+    };
   });
 
   // overallTier is DERIVED, not trusted from the model — the max of the
@@ -94,16 +107,18 @@ export function validateVerdict(v) {
   // green" with a red finding underneath can't slip through.
   const derived = findings.reduce((acc, f) => maxTier(acc, f.tier), TIERS.GREEN);
 
-  // If the model also supplied an overallTier, it must not be LOWER than the
-  // derived one (i.e. must not under-report). We use the stricter of the two.
-  const claimed = normalizeTier(v.overallTier);
-  const overallTier = claimed ? maxTier(derived, claimed) : derived;
+  // A PRESENT-but-invalid overallTier means an unreliable response — fail
+  // CLOSED by throwing, even though `derived` would be safe. Only an ABSENT
+  // overallTier is tolerated (we derive it). When present and valid, we take
+  // the stricter of (derived, claimed) so the model can't under-report.
+  let overallTier = derived;
+  if (v.overallTier !== undefined) {
+    const claimed = normalizeTier(v.overallTier);
+    if (!claimed) throw new Error(`verdict.overallTier present but invalid: ${JSON.stringify(v.overallTier)}`);
+    overallTier = maxTier(derived, claimed);
+  }
 
-  return {
-    summary: typeof v.summary === 'string' ? v.summary : '(no summary)',
-    overallTier,
-    findings,
-  };
+  return { summary: str(v.summary, '(no summary)'), overallTier, findings };
 }
 
 /**
