@@ -13,6 +13,75 @@ import { scrubSecrets, formatVerdict, pingIfNoteworthy, verdictFingerprint, pass
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';
+import { findingFingerprint, buildIssue, actionableFindings, draftIfActionable } from '../src/draft.mjs';
+import { repoForContainer } from '../src/repos.mjs';
+
+test('repoForContainer: maps known containers, null for unknown', () => {
+  assert.equal(repoForContainer('tw-clawd'), 'enspyrco/tech_world_bot');
+  assert.equal(repoForContainer('embodied-dreamfinder'), 'imagineering-cc/embodied-dreamfinder');
+  assert.equal(repoForContainer('claude-shim'), null); // source not versioned anywhere
+  assert.equal(repoForContainer('nope'), null);
+});
+
+test('findingFingerprint: stable per problem, differs on signature/tier', () => {
+  const a = { container: 'tw-clawd', tier: 'green', signature: 'sig' };
+  assert.equal(findingFingerprint(a), findingFingerprint({ ...a }));
+  assert.notEqual(findingFingerprint(a), findingFingerprint({ ...a, tier: 'amber' }));
+  assert.notEqual(findingFingerprint(a), findingFingerprint({ ...a, signature: 'other' }));
+});
+
+test('buildIssue: scrubs secrets, embeds fp marker, bounds the title', () => {
+  const { title, body, fp } = buildIssue({
+    container: 'tw-clawd', tier: 'green', confidence: 'high', signature: 'crash',
+    diagnosis: 'leaked sk-ant-oat01-SECRETvalue_here in the log',
+    evidence: 'AKIA1234567890ABCDEF', proposedAction: 'add a null guard',
+  });
+  assert.doesNotMatch(body, /SECRETvalue/);          // diagnosis secret scrubbed
+  assert.doesNotMatch(body, /AKIA1234567890ABCDEF/); // evidence secret scrubbed
+  assert.match(body, new RegExp(`self-healer-fp: ${fp}`)); // dedup marker present
+  assert.ok(title.length <= 250);
+});
+
+test('actionableFindings: only confident-green with a concrete action', () => {
+  const v = { findings: [
+    { container: 'a', tier: 'green', confidence: 'high', proposedAction: 'fix' },   // ✓
+    { container: 'b', tier: 'green', confidence: 'high', proposedAction: 'none' },   // ✗ no action
+    { container: 'c', tier: 'green', confidence: 'low', proposedAction: 'fix' },     // ✗ low confidence
+    { container: 'd', tier: 'amber', confidence: 'high', proposedAction: 'fix' },    // ✗ not green
+  ] };
+  const out = actionableFindings(v);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].container, 'a');
+});
+
+test('draftIfActionable: OFF by default (no network, no env)', async () => {
+  const saved = process.env.HEALER_DRAFT_ISSUES;
+  delete process.env.HEALER_DRAFT_ISSUES;
+  try {
+    const out = await draftIfActionable({ findings: [{ container: 'tw-clawd', tier: 'green', confidence: 'high', proposedAction: 'fix' }] });
+    assert.deepEqual(out, []); // disabled ⇒ no-op
+  } finally {
+    if (saved !== undefined) process.env.HEALER_DRAFT_ISSUES = saved;
+  }
+});
+
+test('draftIfActionable: enabled but no token ⇒ skipped, no network', async () => {
+  const savedFlag = process.env.HEALER_DRAFT_ISSUES;
+  const savedTokens = [process.env.HEALER_GH_TOKEN, process.env.GITHUB_TOKEN, process.env.GH_TOKEN];
+  process.env.HEALER_DRAFT_ISSUES = '1';
+  delete process.env.HEALER_GH_TOKEN; delete process.env.GITHUB_TOKEN; delete process.env.GH_TOKEN;
+  try {
+    const out = await draftIfActionable({ findings: [{ container: 'tw-clawd', tier: 'green', confidence: 'high', proposedAction: 'fix' }] });
+    assert.equal(out[0].action, 'skipped');
+    assert.match(out[0].detail, /token/);
+  } finally {
+    if (savedFlag !== undefined) process.env.HEALER_DRAFT_ISSUES = savedFlag; else delete process.env.HEALER_DRAFT_ISSUES;
+    const [a, b, c] = savedTokens;
+    if (a !== undefined) process.env.HEALER_GH_TOKEN = a;
+    if (b !== undefined) process.env.GITHUB_TOKEN = b;
+    if (c !== undefined) process.env.GH_TOKEN = c;
+  }
+});
 
 test('scrubSecrets: redacts known token prefixes', () => {
   assert.match(scrubSecrets('token sk-ant-oat01-abc123DEF_xyz here'), /<redacted:anthropic-key>/);
