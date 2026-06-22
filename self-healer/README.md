@@ -102,20 +102,29 @@ existing `notify` proxy (`https://notify.imagineering.cc/send`, a public HTTPS
 endpoint), so this is a plain `fetch` with no shell/SSH surface.
 
 - **Still read-only.** A ping is a notification, not a remediation.
-- **Secrets are scrubbed** from the message (`scrubSecrets`) — the model's
-  diagnosis could quote a log line containing a credential. Only verdict fields
-  (summary + findings) are sent; never the raw `signals`/log tails. Dynamic text
-  is HTML-escaped so it can't break or inject the Telegram markup.
+- **Best-effort secret scrubbing** (`scrubSecrets`) — the model's diagnosis
+  could quote a credential-bearing log line. A prefix denylist alone is a sieve,
+  so it's *layered*: known prefixes (anthropic/github/slack/google/openai/
+  stripe/brevo/aws/JWT/PEM) + a `key=value` redactor for sensitive key names +
+  a high-entropy catch-all for any 32+ char opaque token (the floor preserves
+  shorter diagnostic IDs like LiveKit's ~24-char nodeIds). Leak-side
+  conservative: over-redaction in an outbound message is cheap; a leak is not.
+  Only verdict fields (summary + findings) are sent — never the raw
+  `signals`/log tails. Dynamic text is HTML-escaped (all five metacharacters).
+- **Cooldown (default ON, escalation-aware).** A persistently-amber signal is
+  re-pinged at most once per `HEALER_COOLDOWN_MIN` (default 60) — but a *new*
+  problem or a *tier escalation* (different fingerprint) pings immediately, and
+  the same problem re-pings as an hourly reminder once the window lapses. State
+  in `HEALER_STATE_DIR/last-ping.json`; degrades OPEN (a state-file failure
+  pings anyway — missing a real alert is worse than a duplicate). Set
+  `HEALER_COOLDOWN_MIN=0` to disable.
 - **Silent when it should be:** green verdicts and environments without a
   `NOTIFY_API_KEY` are no-ops, so a dev run never errors and a clean bill never
-  spams. Set `HEALER_NO_PING=1` to force-disable.
-- **Config:** `NOTIFY_API_KEY` (required to actually send), `NOTIFY_URL`
-  (default the public proxy).
-
-> ⚠️ **KNOWN LIMITATION — stateless, no cooldown.** amber-ping has no dedup: a
-> persistently-amber signal would ping on *every* run. The healer isn't
-> scheduled yet, so this can't spam today — but a cooldown/dedup MUST be added
-> **before** wiring the cron. Tracked as a follow-up.
+  spams. `HEALER_NO_PING=1` force-disables.
+- **`NOTIFY_URL` is validated** to https (or loopback http) so an env-poisoned
+  URL can't redirect the Bearer key to an attacker over cleartext.
+- **Config:** `NOTIFY_API_KEY` (required to send), `NOTIFY_URL` (default the
+  public proxy), `HEALER_COOLDOWN_MIN`, `HEALER_STATE_DIR`, `HEALER_NO_PING`.
 
 ## Security posture (v1)
 

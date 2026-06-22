@@ -9,13 +9,32 @@ import assert from 'node:assert/strict';
 import { normalizeTier, tierExitCode, maxTier, TIERS } from '../src/tiers.mjs';
 import { extractVerdict, validateVerdict } from '../src/diagnose.mjs';
 import { collapseRepeats, assertValidContainerName } from '../src/sensor.mjs';
-import { scrubSecrets, formatVerdict, pingIfNoteworthy } from '../src/notify.mjs';
+import { scrubSecrets, formatVerdict, pingIfNoteworthy, verdictFingerprint, passesCooldown } from '../src/notify.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
 
-test('scrubSecrets: redacts known token shapes', () => {
+test('scrubSecrets: redacts known token prefixes', () => {
   assert.match(scrubSecrets('token sk-ant-oat01-abc123DEF_xyz here'), /<redacted:anthropic-key>/);
   assert.match(scrubSecrets('ghs_AAAABBBBCCCCDDDD1111'), /<redacted:github-token>/);
-  assert.match(scrubSecrets('Authorization: Bearer abcdef1234567890'), /Bearer <redacted>/);
+  assert.match(scrubSecrets('github_pat_11ABCDEFG_longtailwithunderscores0000'), /<redacted:github-token>/);
+  assert.doesNotMatch(scrubSecrets('Authorization: Bearer abcdef1234567890'), /abcdef1234567890/);
   assert.equal(scrubSecrets('nothing secret here'), 'nothing secret here');
+});
+
+test('scrubSecrets: catches the shapes a prefix list misses (cage-match PR #101)', () => {
+  // AWS *secret* key (40-char base64, no prefix) → high-entropy catch-all.
+  assert.match(scrubSecrets('aws wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1'), /<redacted/);
+  // k=v with a sensitive key name and an unknown token format.
+  assert.match(scrubSecrets('password=hunter2supersecret'), /password=<redacted>/);
+  assert.match(scrubSecrets('client_secret: abc.def.ghi'), /client_secret:\s*<redacted>/);
+  // PEM private key block.
+  assert.match(scrubSecrets('-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----'), /<redacted:private-key>/);
+});
+
+test('scrubSecrets: preserves short diagnostic IDs (LiveKit nodeIds ~24 chars)', () => {
+  // The 32-char floor on the high-entropy rule keeps diagnostic value.
+  assert.match(scrubSecrets('rotated to NC_OSYDNEY1A_VTmCnBmjsS8o ok'), /NC_OSYDNEY1A_VTmCnBmjsS8o/);
 });
 
 test('formatVerdict: HTML-escapes dynamic text and scrubs secrets', () => {
@@ -44,6 +63,42 @@ test('pingIfNoteworthy: amber without a key is a no-op (no network)', async () =
     assert.match(r.reason, /NOTIFY_API_KEY/);
   } finally {
     if (saved !== undefined) process.env.NOTIFY_API_KEY = saved;
+  }
+});
+
+test('verdictFingerprint: stable, order-independent, changes on escalation', () => {
+  const a = { overallTier: 'amber', findings: [{ container: 'x', tier: 'amber', signature: 's1' }, { container: 'y', tier: 'green', signature: 's2' }] };
+  const b = { overallTier: 'amber', findings: [{ container: 'y', tier: 'green', signature: 's2' }, { container: 'x', tier: 'amber', signature: 's1' }] };
+  assert.equal(verdictFingerprint(a), verdictFingerprint(b)); // order-independent
+  const escalated = { overallTier: 'red', findings: [{ container: 'x', tier: 'red', signature: 's1' }, { container: 'y', tier: 'green', signature: 's2' }] };
+  assert.notEqual(verdictFingerprint(a), verdictFingerprint(escalated)); // escalation ⇒ new fp
+});
+
+test('passesCooldown: same problem within window skips, escalation + expiry re-ping', () => {
+  const saved = process.env.HEALER_STATE_DIR;
+  process.env.HEALER_STATE_DIR = mkdtempSync(pjoin(tmpdir(), 'healer-cd-'));
+  try {
+    const v = { overallTier: 'amber', findings: [{ container: 'c', tier: 'amber', signature: 's' }] };
+    const t0 = 1_000_000_000_000;
+    assert.equal(passesCooldown(v, t0), true);                 // first time ⇒ ping
+    assert.equal(passesCooldown(v, t0 + 60_000), false);       // 1 min later, same ⇒ skip
+    const worse = { overallTier: 'red', findings: [{ container: 'c', tier: 'red', signature: 's' }] };
+    assert.equal(passesCooldown(worse, t0 + 120_000), true);   // escalated ⇒ ping despite window (re-stamps clock to here)
+    assert.equal(passesCooldown(worse, t0 + 120_000 + 61 * 60_000), true); // >60min after LAST ping ⇒ re-ping (reminder)
+  } finally {
+    if (saved !== undefined) process.env.HEALER_STATE_DIR = saved; else delete process.env.HEALER_STATE_DIR;
+  }
+});
+
+test('passesCooldown: HEALER_COOLDOWN_MIN=0 disables the cooldown', () => {
+  const saved = process.env.HEALER_COOLDOWN_MIN;
+  process.env.HEALER_COOLDOWN_MIN = '0';
+  try {
+    const v = { overallTier: 'amber', findings: [{ container: 'c', tier: 'amber', signature: 's' }] };
+    assert.equal(passesCooldown(v, 5), true);
+    assert.equal(passesCooldown(v, 6), true); // no suppression
+  } finally {
+    if (saved !== undefined) process.env.HEALER_COOLDOWN_MIN = saved; else delete process.env.HEALER_COOLDOWN_MIN;
   }
 });
 
