@@ -322,6 +322,97 @@ ssh 149.118.69.221 'crontab -l 2>/dev/null | grep -vF "# email-health-watch" | {
 ssh 149.118.69.221 '/home/ubuntu/email-health-watch.sh; tail ~/email-health-watch.log'
 ```
 
+## Built: notify-canary-melbourne
+
+`notify-canary-melbourne.sh` is the **external witness for the alerting path
+itself**. Every cron + watcher on Sydney funnels alerts through ONE chain:
+notify container (127.0.0.1:8090) → Telegram → Nick. That chain cannot announce
+its own death — if Docker, the notify container, or Sydney's egress to
+api.telegram.org is down, the alert is POSTed to the corpse and lost silently.
+This canary runs on **Melbourne** (nick-mel) — a sibling of
+`oci-instance-watch-melbourne.sh` — and watches Sydney's notify chain from
+outside.
+
+**The independence rule (the whole point):** the canary must NOT route its own
+alert through the Sydney notify service it is checking. So, unlike every other
+watcher, it does **not** use the lib's `tg()` helper (which POSTs to
+notify.imagineering.cc). It sources `scripts/lib/telegram.sh` and calls
+`send_telegram_alert()`, which hits `api.telegram.org` **directly** with a bot
+token held on Melbourne. Spreading the bot token is normally an anti-pattern
+(that's why notify exists) — but the one client that may not depend on notify
+is the client that watches notify. Documented exception.
+
+**Three-layer probe over one SSH hop** (Mel→Syd), because a bare TCP/`/health`
+check is a false positive — `/health` returns static `{"ok":true}` without ever
+touching Telegram, so a revoked token or blocked egress passes it:
+
+1. **L1** — `docker inspect` notify: container `running` AND Docker-health
+   `healthy` (tolerates `none` if no healthcheck defined).
+2. **L2** — `GET http://127.0.0.1:8090/health` returns `200`.
+3. **L3** — Telegram `getMe` succeeds **from Sydney's network**, using the
+   container's own bot token (read from its env, never shipped over the wire).
+   This is the layer that makes it a *delivery* check, not a liveness check —
+   it proves egress + token validity WITHOUT sending Nick a message (a test
+   `/send` would spam Telegram every cycle).
+
+**Shape:** recurring threshold-alert (like `email-health-watch.sh`, *not* the
+self-disabling template) — a canary that disabled itself after one recovery
+would stop guarding. `phase_a_check` always returns 1; the state machine never
+advances to DONE. Alerts debounce to **one 🚨 per failure-episode** via a
+sentinel file, fire a single ✅ on recovery, then re-arm. A single transient
+`UNKNOWN` (SSH blip, no token in container env) does **not** fire — only a
+second consecutive `UNKNOWN` escalates (a `FAIL` fires immediately). `DRY_RUN=1`
+logs the alert instead of sending.
+
+**Residual gap (known tradeoff):** if Melbourne AND Sydney die simultaneously,
+no alert fires — but that's covered by the existing mutual peer monitoring
+(Sydney's `oci-instance-watch.sh` watches Melbourne; Melbourne's
+`oci-instance-watch-melbourne.sh` watches Sydney), so a dead Melbourne is
+itself alarmed from Sydney. The canary also can't distinguish "notify token
+revoked" from "Telegram API outage" — both surface as `FAIL:telegram-*`; that's
+acceptable since both mean Sydney can't deliver.
+
+### Install on Melbourne (nick-mel, 130.162.192.233)
+
+```bash
+# 1. Lib + the direct-Telegram helper + the canary. Melbourne already runs
+#    oci-instance-watch-melbourne.sh, so lib/watcher-base.sh + ~/bin tooling
+#    are present; the canary additionally needs lib/telegram.sh.
+scp scripts/watchers/lib/watcher-base.sh nick-mel:/tmp/   # if not already there
+scp scripts/lib/telegram.sh              nick-mel:/tmp/
+scp scripts/watchers/notify-canary-melbourne.sh nick-mel:/tmp/
+ssh nick-mel 'mkdir -p ~/lib \
+  && install -m 0755 /tmp/watcher-base.sh ~/lib/ \
+  && install -m 0755 /tmp/telegram.sh     ~/lib/ \
+  && install -m 0755 /tmp/notify-canary-melbourne.sh ~/ \
+  && rm -f /tmp/watcher-base.sh /tmp/telegram.sh /tmp/notify-canary-melbourne.sh'
+
+# 2. The INDEPENDENT alert path needs a Telegram bot token on Melbourne, at
+#    /etc/imagineering-secrets/telegram.env (root:nick 0640) — the same file
+#    scripts/lib/telegram.sh auto-sources. Build it locally from notify's
+#    secrets and install (never echo the token over an interactive ssh).
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
+umask 077
+BOT=$(sops -d notify/secrets.yaml | yq -r '.telegram_bot_token')
+CHAT=$(sops -d notify/secrets.yaml | yq -r '.telegram_chat_id')
+[ -n "$BOT" ] && [ "$BOT" != "null" ] || { echo "ERROR: telegram_bot_token empty/null — aborting"; exit 1; }
+printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "$BOT" "$CHAT" > /tmp/telegram.env
+scp /tmp/telegram.env nick-mel:/tmp/
+ssh nick-mel 'sudo install -d -m 0755 /etc/imagineering-secrets \
+  && sudo install -m 0640 -o root -g "$(id -gn)" /tmp/telegram.env /etc/imagineering-secrets/telegram.env \
+  && rm -f /tmp/telegram.env'
+rm -f /tmp/telegram.env; unset BOT CHAT
+
+# 3. Confirm Melbourne can SSH to Sydney as ubuntu (BatchMode, key-based):
+ssh nick-mel 'ssh -o BatchMode=yes -o ConnectTimeout=10 ubuntu@149.118.69.221 "echo reachable"'
+
+# 4. DRY_RUN smoke on the box, then install the cron entry (Melbourne crontab,
+#    user ubuntu — offset to :47, clear of the oci-watcher's :17). Tag MUST
+#    match CRON_TAG. Idempotent: strips any existing line first.
+ssh nick-mel 'DRY_RUN=1 ~/notify-canary-melbourne.sh; tail ~/notify-canary-melbourne.log'
+ssh nick-mel 'crontab -l 2>/dev/null | grep -vF "# notify-canary-melbourne" | { cat; echo "47 */2 * * * /home/ubuntu/notify-canary-melbourne.sh  # notify-canary-melbourne"; } | crontab -'
+```
+
 ## See also
 
 - `template.sh` — the file
