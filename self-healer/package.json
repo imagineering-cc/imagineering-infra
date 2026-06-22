@@ -1,0 +1,13 @@
+{
+  "name": "self-healer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "In-prod log-reading self-healer for the Tech World stack: sensor → diagnose → (eventually) act, governed by a traffic-light blast-radius leash. v1 is read-only.",
+  "bin": { "self-healer": "src/healer.mjs" },
+  "scripts": {
+    "diagnose": "node src/healer.mjs",
+    "diagnose:remote": "HEALER_HOST=nick@149.118.69.221 node src/healer.mjs"
+  },
+  "engines": { "node": ">=18" }
+}

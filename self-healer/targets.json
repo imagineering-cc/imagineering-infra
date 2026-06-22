@@ -1,0 +1,9 @@
+{
+  "_comment": "Containers the self-healer watches. Start with the Tech World bot stack — the subtraction case where the blast-radius leash is safest (green-tier toil Nick currently does by hand). claude-shim is watched too: if the BRAIN is sick, the healer should know its own diagnosis is degraded.",
+  "targets": [
+    { "name": "tw-clawd" },
+    { "name": "tw-gremlin" },
+    { "name": "embodied-dreamfinder" },
+    { "name": "claude-shim" }
+  ]
+}
