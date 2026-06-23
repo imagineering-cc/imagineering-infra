@@ -675,6 +675,7 @@ deploy_pm_bot() {
         printf 'LIVEKIT_API_KEY=%s\n'             "$(dotenv_quote "$(pm_bot_field '.livekit_api_key')")"
         printf 'LIVEKIT_API_SECRET=%s\n'          "$(dotenv_quote "$(pm_bot_field '.livekit_api_secret')")"
         printf 'ADMIN_IDS=%s\n'                   "$(dotenv_quote "$(pm_bot_field '.admin_ids')")"
+        printf 'SELF_PUPPET_IDS=%s\n'             "$(dotenv_quote "$(pm_bot_field '.self_puppet_ids')")"
         printf 'MATRIX_ALWAYS_RESPOND_ROOMS=%s\n' "$(dotenv_quote "$(pm_bot_field '.matrix_always_respond_rooms')")"
         printf 'CALENDAR_URL=%s\n'                "$(dotenv_quote "$(pm_bot_field '.calendar_url')")"
         printf 'EVENT_TIMEZONE=%s\n'              "$(dotenv_quote "$(pm_bot_field '.event_timezone')")"
