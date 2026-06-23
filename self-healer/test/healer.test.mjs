@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { normalizeTier, tierExitCode, maxTier, TIERS } from '../src/tiers.mjs';
 import { extractVerdict, validateVerdict, resolveHttpTimeouts } from '../src/diagnose.mjs';
-import { collapseRepeats, assertValidContainerName } from '../src/sensor.mjs';
+import { collapseRepeats, splitLogTimestamp, assertValidContainerName } from '../src/sensor.mjs';
 import { scrubSecrets, formatVerdict, pingIfNoteworthy, verdictFingerprint, passesCooldown } from '../src/notify.mjs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -320,9 +320,37 @@ test('resolveHttpTimeouts: curl<runOnHost monotonicity + integer hold for ALL in
   assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '150000; rm -rf /' }).curlMaxTimeSec, 150);
 });
 
-test('collapseRepeats: folds identical runs into ×N, leaves singletons alone', () => {
+test('collapseRepeats: folds identical runs into ×N, leaves singletons alone (no timestamps)', () => {
   assert.equal(collapseRepeats('a\na\na\nb'), 'a  (×3)\nb');
   assert.equal(collapseRepeats('x\ny\nz'), 'x\ny\nz');
+});
+
+test('splitLogTimestamp: parses docker -t prefix, trims fractional seconds, null when absent', () => {
+  assert.deepEqual(splitLogTimestamp('2026-06-23T02:10:17.304820972Z INFO: ready'),
+    { ts: '2026-06-23T02:10:17Z', msg: 'INFO: ready' });
+  assert.deepEqual(splitLogTimestamp('2026-06-23T02:10:17+10:00 hi'),
+    { ts: '2026-06-23T02:10:17+10:00', msg: 'hi' });
+  assert.deepEqual(splitLogTimestamp('no timestamp here'), { ts: null, msg: 'no timestamp here' });
+});
+
+test('collapseRepeats: cadence-aware — folds by MESSAGE and reports the time SPAN (deploy #49 false-positive fix)', () => {
+  // The exact shape that mis-diagnosed as a "reconnect storm": identical message,
+  // 10 minutes apart. The span makes the benign heartbeat legible to the brain.
+  const beat = [
+    '2026-06-23T02:10:17.304820972Z INFO: OpenAI Realtime mode ready',
+    '2026-06-23T02:20:17.282708278Z INFO: OpenAI Realtime mode ready',
+    '2026-06-23T02:30:17.146134121Z INFO: OpenAI Realtime mode ready',
+  ].join('\n');
+  assert.equal(collapseRepeats(beat),
+    'INFO: OpenAI Realtime mode ready  (×3, 2026-06-23T02:10:17Z→2026-06-23T02:30:17Z)');
+});
+
+test('collapseRepeats: timestamped singleton keeps its timestamp; distinct messages stay separate', () => {
+  assert.equal(collapseRepeats('2026-06-23T02:10:17.5Z only once'),
+    '2026-06-23T02:10:17Z only once');
+  assert.equal(
+    collapseRepeats('2026-06-23T02:10:17Z aaa\n2026-06-23T02:10:18Z bbb'),
+    '2026-06-23T02:10:17Z aaa\n2026-06-23T02:10:18Z bbb');
 });
 
 test('assertValidContainerName: accepts docker-legal names, rejects shell metachars', () => {
