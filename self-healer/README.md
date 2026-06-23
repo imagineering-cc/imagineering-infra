@@ -170,17 +170,42 @@ endpoint), so this is a plain `fetch` with no shell/SSH surface.
 - **Config:** `NOTIFY_API_KEY` (required to send), `NOTIFY_URL` (default the
   public proxy), `HEALER_COOLDOWN_MIN`, `HEALER_STATE_DIR`, `HEALER_NO_PING`.
 
-## Security posture (v1)
+## Security posture (v2)
 
 "Read-only intent" is not "harmless" — command injection on the prod host is
-RCE regardless of what the tool is *for*. The cage-match (PR #100) hardened the
-string boundaries:
+RCE regardless of what the tool is *for*. PR #100 hardened the string boundaries
+by *validating* every interpolated value; the v2 hardening (#46a/#46c) makes
+injection **structurally impossible** rather than validated-away, so the safety
+no longer depends on per-input regexes that stop scaling as the command set
+grows (the green-auto roadmap step).
 
-- **Shell interpolation is validated, not assumed.** The only values that reach
-  a shell string are container names (allowlisted to Docker's
-  `[a-zA-Z0-9][a-zA-Z0-9_.-]*` grammar at config load) and `SHIM_URL` (parsed +
-  required to be a loopback `http://` URL). The big JSON body goes via stdin,
-  never the command line.
+- **Typed-argv host primitive (`runOnHostScript`).** Untrusted values
+  (container name, `SHIM_URL`, `--max-time`) are no longer interpolated into a
+  shell string. They are passed as **positional arguments to a FIXED script**:
+  - *on-box:* `spawn('bash', ['-c', SCRIPT, '_', ...args])` — bash binds the
+    args to `$1,$2…` positionally; they are never part of the script text, so
+    the local shell can't parse them as code.
+  - *remote (ssh):* ssh concatenates its trailing argv into ONE string that the
+    **remote login shell re-parses** — so plain positional args would re-open
+    injection. We therefore **base64-encode every untrusted arg** (the base64
+    alphabet `[A-Za-z0-9+/=]` has no shell metacharacters, so each token
+    survives the second parse as one inert word) and the fixed script
+    base64-DECODEs them internally before use. `base64 -d` runs on the OCI box
+    in both paths, so one fixed script serves on-box and remote. The big JSON
+    body still goes via stdin, never the command line.
+  - `runOnHost(cmdString)` is retained for fixed/trusted command strings; the
+    self-healer's own untrusted-input call sites (sensor, diagnose) all use the
+    typed primitive.
+- **Collision-proof sensor framing.** The sensor splits inspect-output from log
+  tails on a boundary marker. That marker is now a **random per-call nonce**
+  (`crypto.randomBytes`), not a static sentinel — attacker-controlled log content
+  cannot predict or forge it, so a log line can't spoof the meta↔logs boundary.
+  (We still split on the first occurrence as belt-and-braces.)
+- **Shim-timeout floor (#50).** The healer can't see the shim's own
+  `SHIM_TIMEOUT_MS` (120s on the box). `resolveHttpTimeouts` now clamps the
+  effective curl `--max-time` UP to at least 120s (warning on stderr when it
+  does), so a too-small `SHIM_HTTP_TIMEOUT_MS` can't silently recreate the
+  deploy-#49 bug (curl killing an answer the shim is still producing).
 - **The verdict fails CLOSED.** Tiers are a validated closed set; `overallTier`
   is *derived* from the per-finding tiers, not trusted from the model. An
   off-set or missing tier throws (exit 3) rather than silently becoming green.
@@ -190,10 +215,10 @@ string boundaries:
   green-auto roadmap step: the action stage must never treat the LLM verdict as
   authority without an independent guardrail.
 
-Residual (named tradeoff): the remote path still composes a command string run
-through the SSH login shell. With the two interpolation points validated this
-is closed for v1's inputs; a fully typed argv primitive (`ssh host -- bash -s`
-with data on a separate channel) is the v2 hardening if the input set grows.
+Defence-in-depth retained: the container-name allowlist and the loopback
+`SHIM_URL` check still run — they're no longer the *sole* injection gate, but
+they encode true invariants (Docker name grammar; shim is loopback-only) and
+fail fast on misconfiguration.
 
 ## Known substrate facts (2026-06-22)
 

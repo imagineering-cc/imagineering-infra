@@ -15,7 +15,8 @@
 // signal — a container that keeps dying and respawning, regardless of how
 // calm any single log snapshot looks.
 
-import { runOnHost } from './host.mjs';
+import { randomBytes } from 'node:crypto';
+import { runOnHostScript } from './host.mjs';
 
 /**
  * Legal Docker container-name grammar. Container names are interpolated into a
@@ -100,6 +101,50 @@ export function collapseRepeats(text) {
  */
 
 /**
+ * The fixed sensor script. NOTHING here is interpolated at build time — the
+ * container name, log-line count, and split nonce all arrive as base64
+ * positional args ($1,$2,$3) and are decoded INSIDE the script, so attacker- or
+ * config-shaped values can never become script text (see host.mjs
+ * `runOnHostScript`). The script:
+ *   - $1 → container name, $2 → tail count, $3 → per-call split nonce.
+ *   - captures `docker inspect`'s OWN exit code (INSPECT_RC) so the caller can
+ *     distinguish exists / absent / unreachable.
+ *   - prints the nonce on its own line as the meta↔logs boundary.
+ *   - `docker logs -t` keeps the RFC3339 timestamps collapseRepeats folds.
+ * The tail count is `printf %d`-coerced to an integer (defence-in-depth: it is
+ * already a JS number at the call site, but this guarantees no non-numeric token
+ * reaches `--tail` even if a caller passes something odd).
+ */
+export const SENSOR_SCRIPT =
+  '__n=$(printf %s "$1" | base64 -d); ' +
+  '__t=$(printf %d "$(printf %s "$2" | base64 -d)" 2>/dev/null); ' +
+  '__s=$(printf %s "$3" | base64 -d); ' +
+  '__i=$(docker inspect "$__n" --format \'{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}\' 2>&1); __rc=$?; ' +
+  "printf 'INSPECT_RC=%s\\n' \"$__rc\"; printf '%s\\n' \"$__i\"; " +
+  'printf \'%s\\n\' "$__s"; ' +
+  'docker logs -t "$__n" --tail "$__t" 2>&1';
+
+/**
+ * Split a sensor-script stdout on the per-call nonce boundary. Pure + exported
+ * for adversarial testing: a log line that CONTAINS a guessed/forged boundary
+ * marker must not corrupt the meta↔logs split, because the real boundary is a
+ * random per-call nonce the log content cannot predict. We split on the FIRST
+ * occurrence so even a (vanishingly unlikely) nonce echo can't move the seam
+ * earlier than the real one.
+ * @param {string} stdout
+ * @param {string} nonce
+ * @returns {{head: string, logs: string}}
+ */
+export function splitOnNonce(stdout, nonce) {
+  const marker = `${nonce}\n`;
+  let at = stdout.indexOf(marker);
+  let skip = marker.length;
+  if (at === -1) { at = stdout.indexOf(nonce); skip = nonce.length; } // tolerate a missing trailing newline
+  if (at === -1) return { head: stdout, logs: '' };
+  return { head: stdout.slice(0, at), logs: stdout.slice(at + skip) };
+}
+
+/**
  * Gather signals for one container.
  * @param {string} name
  * @param {number} logLines
@@ -112,24 +157,19 @@ async function gatherContainer(name, logLines) {
   // re-review): the container exists (rc 0), it's genuinely absent ("No such
   // object", rc≠0), or docker/the host is unreachable (daemon down, perm
   // denied, ssh fail) — the last MUST fail CLOSED, never look like "absent".
-  // Split on the FIRST sentinel occurrence (indexOf) so log content can't
-  // corrupt the meta/logs boundary.
-  const SENTINEL = '@@HEALER_SPLIT@@';
-  const cmd =
-    `__i=$(docker inspect '${name}' --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>&1); __rc=$?; ` +
-    `printf 'INSPECT_RC=%s\\n' "$__rc"; printf '%s\\n' "$__i"; ` +
-    `echo '${SENTINEL}'; ` +
-    `docker logs -t '${name}' --tail ${logLines} 2>&1`;
-
-  const { stdout, stderr, code } = await runOnHost(cmd);
+  //
+  // #46a/#46c hardening: the name + tail count go in as base64 positional args
+  // (injection-inert by construction), and the meta↔logs boundary is a RANDOM
+  // per-call nonce — not a static sentinel an attacker could embed in a log line
+  // to forge the boundary.
+  const nonce = `HEALER_SPLIT_${randomBytes(16).toString('hex')}`;
+  const { stdout, stderr, code } = await runOnHostScript(SENSOR_SCRIPT, [name, logLines, nonce]);
   // ssh returns 255 when the connection itself fails — a SENSING failure.
   if (code === 255) {
     throw new Error(`host unreachable while sensing ${name} (ssh exit 255): ${stderr.trim()}`);
   }
 
-  const splitAt = stdout.indexOf(SENTINEL);
-  const head = splitAt === -1 ? stdout : stdout.slice(0, splitAt);
-  const logs = splitAt === -1 ? '' : stdout.slice(splitAt + SENTINEL.length);
+  const { head, logs } = splitOnNonce(stdout, nonce);
 
   const headLines = head.split('\n');
   const rcLine = headLines.find((l) => l.startsWith('INSPECT_RC=')) ?? '';
