@@ -16,8 +16,8 @@
 // real "monster" — a prompt-injection-into-codegen surface — and is a
 // deliberately separate, cage-built step. This is its safe precursor.
 
-import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scrubSecrets } from './notify.mjs';
 import { repoForContainer } from './repos.mjs';
@@ -26,7 +26,7 @@ const GH_API = 'https://api.github.com';
 const LABEL = 'self-healer';
 const ZWSP = '​'; // zero-width space, to neutralize @mentions
 
-// Single-box atomic lock for the green-draft race window.
+// Single-box owner-fenced lock for the green-draft race window.
 //
 // The fingerprint-marker dedup (alreadyFiled) reconciles against GitHub's open
 // issues, but GitHub's List API is eventually-consistent and the check-then-
@@ -35,13 +35,40 @@ const ZWSP = '​'; // zero-width space, to neutralize @mentions
 // and both create. This lock closes that window: each per-finding draft first
 // takes a per-fingerprint lock; exactly one caller wins, the others SKIP.
 //
-// Primitive: `mkdirSync(lockPath)` — directory creation is atomic on POSIX
-// filesystems (the kernel guarantees a single winner; concurrent callers get
-// EEXIST). The lock is keyed on the SAME findingFingerprint the marker dedup
-// uses, so distinct findings never contend and the two layers agree by
-// construction. The lock guards the short race window; the marker guards across
-// longer spans (it survives a crash, a TTL reclaim, or a process restart). The
-// lock is ADDITIVE to the marker, never a replacement.
+// OWNER IDENTITY + SERIALIZED RECLAIM (cage-match PR #108, Maxwell + Carnot).
+// The naive "mkdir wins, rm-then-mkdir reclaims" design has two races because
+// the lock has no owner and the reclaim isn't atomic:
+//   1. the steal+re-create is multi-step, so under concurrent stale-reclaim two
+//      runs can both end up creating (a stat/rename TOCTOU ABA) → DOUBLE FILE;
+//   2. unconditional release deletes whatever's at the path, not the lock THIS
+//      caller took — so a run whose filing outran the TTL and was reclaimed out
+//      from under it would, in its finally, delete the NEW owner's lock → a
+//      third run enters the critical section.
+// The fix has THREE atomic gates, all fenced on a unique OWNER TOKEN
+// (crypto.randomBytes) written into the lock dir:
+//   - ACQUIRE (fast path): `mkdirSync(lockPath)` — atomic on POSIX (exactly one
+//     caller wins; others get EEXIST), then write the token file. Returns the
+//     token, or null if another live run owns it.
+//   - RECLAIM (stale lock): the steal+re-create runs UNDER a per-fingerprint
+//     O_EXCL reclaim-gate file (`writeFileSync(gate, …, {flag:'wx'})`), so the
+//     takeover is SINGLE-THREADED — exactly one reclaimer holds the gate, re-
+//     checks staleness inside it, removes the stale dir, and re-creates with its
+//     token. This single-writer reclaim eliminates the lock-free ABA that
+//     defeats a pure rename/stat steal under 3+ concurrent reclaimers. (A
+//     stale gate, from a crashed reclaimer, is itself broken on a TTL basis.)
+//   - RELEASE: read the token file; only remove the lock if it STILL MATCHES the
+//     token we acquired. A run reclaimed out from under itself reads a different
+//     (or missing) token → it does NOT delete the new owner's lock.
+// Net guarantee: AT MOST ONE winner for any number of concurrent callers
+// (verified by an N-process stress test). Under pathological contention a caller
+// may get a false `null` (skip) — SAFE for a fail-closed write gate (the next
+// cron tick re-files), never a double.
+//
+// The lock is keyed on the SAME findingFingerprint the marker dedup uses, so
+// distinct findings never contend and the two layers agree by construction. The
+// lock guards the short race window; the marker guards across longer spans (it
+// survives a crash, a TTL reclaim, or a process restart). The lock is ADDITIVE
+// to the marker, never a replacement.
 //
 // SCOPE — this is a SINGLE-HOST lock. The real deployment is one OCI box (cron +
 // manual runs), which is exactly what this covers. It does NOT provide cross-
@@ -70,64 +97,151 @@ function lockPath(fp) {
   return join(lockStateDir(), `draft-lock-${fp}`);
 }
 
+/** Path of the owner-token file inside a lock dir. */
+function ownerFile(path) {
+  return join(path, 'owner');
+}
+
+/** Create the canonical lock dir atomically and stamp it with `tok`.
+ * Returns the token on success; null if another caller won the mkdir (EEXIST);
+ * rethrows on any unexpected error (fail-closed). The token write happens AFTER
+ * the atomic mkdir, so the mkdir is the single point of mutual exclusion. */
+function stampNewLock(path, tok) {
+  try {
+    mkdirSync(path); // atomic: exactly one caller wins
+  } catch (err) {
+    if (err && err.code === 'EEXIST') return null; // someone else owns it
+    throw err; // unexpected → fail closed
+  }
+  writeFileSync(ownerFile(path), tok);
+  return tok;
+}
+
+/** Path of the per-fingerprint RECLAIM GATE file. This is a SEPARATE O_EXCL
+ * file that serializes stale-lock reclaimers: only its holder may steal +
+ * re-create the canonical lock, so the reclaim critical section is single-
+ * threaded and free of the rename/stat ABA races that defeat a lock-free steal
+ * under 3+ concurrent reclaimers. */
+function reclaimGatePath(fp) {
+  return `${lockPath(fp)}.reclaim`;
+}
+
 /**
- * Try to atomically acquire the per-fingerprint draft lock.
+ * Try to acquire the per-fingerprint draft lock.
  *
- * Returns `true` if THIS caller now owns the lock (proceed to file), `false` if
- * another live run owns it (skip). Behaviour:
- *   - mkdir succeeds                → acquired (true).
- *   - mkdir throws EEXIST, lock STALE (mtime older than TTL) → reclaim it
- *     (remove + re-mkdir) and acquire. If the reclaim mkdir itself loses an
- *     EEXIST race to a concurrent reclaimer, the other run owns it → skip
- *     (false).
- *   - mkdir throws EEXIST, lock FRESH → another run owns it → skip (false).
- *   - any OTHER (unexpected) error   → FAIL CLOSED: rethrow so the caller does
- *     NOT file (consistent with the dedup read's "can't confirm → don't write").
+ * Returns a non-empty OWNER TOKEN string if THIS caller now owns the lock (pass
+ * it to releaseDraftLock so release is owner-fenced); returns `null` if another
+ * live run owns it (skip). Throws ONLY on an unexpected error so the caller
+ * fails closed (does NOT file) — consistent with the dedup read's "can't confirm
+ * → don't write". A `null` is a clean "someone else owns it", not an error.
  *
- * Note `false` is a clean "someone else owns it, skip"; only an UNEXPECTED error
- * propagates, which the caller treats as fail-closed (no filing).
- * @returns {boolean}
+ * Mutual exclusion has TWO atomic gates:
+ *   1. the canonical lock dir — `mkdirSync` (exactly one creator wins);
+ *   2. the reclaim gate — an O_EXCL file that single-threads stale takeover so
+ *      the steal+re-create can't ABA-race under N≥3 concurrent reclaimers.
+ * Together they guarantee AT MOST ONE winner for any number of concurrent
+ * callers (verified by an N-process stress test). Under pathological contention
+ * a caller may get a false `null` (skip) — which is SAFE for a fail-closed write
+ * gate (the next cron tick re-files), never a double.
+ * @returns {string|null}
  */
 export function acquireDraftLock(fp, nowMs = Date.now()) {
   const path = lockPath(fp);
+  const tok = randomBytes(16).toString('hex');
   mkdirSync(lockStateDir(), { recursive: true });
+
+  // Fast path: an uncontended / free path is claimed by a single atomic mkdir.
+  const fresh = stampNewLock(path, tok);
+  if (fresh) return fresh;
+
+  // The lock exists. Decide stale vs live by age.
+  let ageMs;
   try {
-    mkdirSync(path); // atomic: exactly one caller wins
-    return true;
+    ageMs = nowMs - statSync(path).mtimeMs;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      // Vanished between mkdir and stat (a concurrent release). Retry the atomic
+      // create once; its outcome is authoritative.
+      return stampNewLock(path, tok); // token | null
+    }
+    throw err; // unexpected → fail closed
+  }
+  if (ageMs <= lockTtlMs()) return null; // fresh lock held by a live run → skip
+
+  // STALE → serialize the takeover through the O_EXCL reclaim gate so exactly
+  // one reclaimer runs the steal+re-create at a time (no lock-free ABA).
+  return reclaimStaleLock(fp, path, tok, nowMs);
+}
+
+/** Reclaim a STALE canonical lock under the single-writer reclaim gate. Returns
+ * the new owner token if this caller reclaimed it, else null (another reclaimer
+ * holds the gate, or the lock turned out live/already-reclaimed on re-check). */
+function reclaimStaleLock(fp, path, tok, nowMs) {
+  const gate = reclaimGatePath(fp);
+
+  // Acquire the reclaim gate atomically (O_EXCL). If held, try to break it only
+  // if it's itself stale (a crashed reclaimer); otherwise skip — a live
+  // reclaimer is handling this fingerprint.
+  try {
+    writeFileSync(gate, tok, { flag: 'wx' }); // atomic create-exclusive
   } catch (err) {
     if (err && err.code === 'EEXIST') {
-      // Lock exists. Reclaim only if it's stale (a crashed prior run).
-      let ageMs;
+      let gateAgeMs;
+      try { gateAgeMs = nowMs - statSync(gate).mtimeMs; } catch { return null; }
+      if (gateAgeMs <= lockTtlMs()) return null; // a live reclaimer holds the gate → skip
+      // Stale gate: clear it and retry the exclusive create ONCE.
+      try { rmSync(gate, { force: true }); } catch { /* tolerate */ }
       try {
-        ageMs = nowMs - statSync(path).mtimeMs;
-      } catch {
-        // The lock vanished between mkdir and stat (a concurrent release/
-        // reclaim). Re-attempt acquire ONCE; treat its outcome as authoritative.
-        try { mkdirSync(path); return true; } catch (e2) {
-          if (e2 && e2.code === 'EEXIST') return false; // someone else re-took it
-          throw e2; // unexpected → fail closed
-        }
+        writeFileSync(gate, tok, { flag: 'wx' });
+      } catch (e2) {
+        if (e2 && e2.code === 'EEXIST') return null; // another reclaimer won the gate
+        throw e2; // unexpected → fail closed
       }
-      if (ageMs > lockTtlMs()) {
-        // Stale: reclaim. rm then re-mkdir; if a concurrent reclaimer beats us
-        // to the re-mkdir, they own it and we skip.
-        try { rmSync(path, { recursive: true, force: true }); } catch { /* tolerate; mkdir below decides */ }
-        try { mkdirSync(path); return true; } catch (e3) {
-          if (e3 && e3.code === 'EEXIST') return false;
-          throw e3; // unexpected → fail closed
-        }
-      }
-      return false; // fresh lock held by a live run → skip
+    } else {
+      throw err; // unexpected → fail closed
     }
-    throw err; // unexpected error → fail closed (do NOT file)
+  }
+
+  // GATE HELD — single-threaded critical section. Re-check the lock under the
+  // gate (it may have been reclaimed/released since our pre-gate stat), then
+  // steal + re-create.
+  try {
+    let curAgeMs;
+    try {
+      curAgeMs = nowMs - statSync(path).mtimeMs;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        // Lock gone (released under us) → just create fresh.
+        return stampNewLock(path, tok); // token | null
+      }
+      throw err; // unexpected → fail closed
+    }
+    if (curAgeMs <= lockTtlMs()) return null; // became live → skip
+    // Still stale, and we are the sole reclaimer: remove + re-create.
+    rmSync(path, { recursive: true, force: true });
+    return stampNewLock(path, tok); // token | null (null only on an impossible race)
+  } finally {
+    try { rmSync(gate, { force: true }); } catch { /* gate TTL is the backstop */ }
   }
 }
 
-/** Release the per-fingerprint lock after a filing ATTEMPT completes (success or
- * failure), so the next legitimate run isn't blocked. Best-effort: a release
- * failure must not throw (the TTL reclaim is the backstop). */
-export function releaseDraftLock(fp) {
-  try { rmSync(lockPath(fp), { recursive: true, force: true }); } catch { /* TTL reclaims */ }
+/**
+ * Release the per-fingerprint lock after a filing ATTEMPT completes (success or
+ * failure), so the next legitimate run isn't blocked. OWNER-FENCED: removes the
+ * lock ONLY if its on-disk owner token still matches `tok` (the token returned
+ * by acquireDraftLock). A run that was reclaimed out from under itself reads a
+ * different/missing token and does NOT delete the new owner's lock. Best-effort:
+ * a release failure must not throw (the TTL reclaim is the backstop).
+ * @param {string} fp
+ * @param {string} tok the token returned by acquireDraftLock for this fp
+ */
+export function releaseDraftLock(fp, tok) {
+  const path = lockPath(fp);
+  try {
+    const onDisk = readFileSync(ownerFile(path), 'utf8');
+    if (onDisk !== tok) return; // not ours anymore (reclaimed) → do NOT delete
+    rmSync(path, { recursive: true, force: true });
+  } catch { /* missing/unreadable token or rm failure → leave it; TTL reclaims */ }
 }
 
 function token() {
@@ -256,16 +370,16 @@ export async function draftIfActionable(verdict) {
 
     // Atomic single-box lock: take it BEFORE the dedup read + create so a
     // concurrent run on the same box can't slip between our check and create.
-    // A clean loss (false) = another live run owns this fingerprint → skip.
-    // An UNEXPECTED lock error throws → caught below → fail closed (no filing).
-    let locked = false;
+    // A null return = another live run owns this fingerprint → skip. An
+    // UNEXPECTED lock error throws → caught here → fail closed (no filing).
+    let lockTok = null;
     try {
-      locked = acquireDraftLock(fp);
+      lockTok = acquireDraftLock(fp);
     } catch (err) {
       outcomes.push({ container: f.container, action: 'failed', detail: `lock error (fail-closed): ${err.message}` });
       continue;
     }
-    if (!locked) {
+    if (!lockTok) {
       outcomes.push({ container: f.container, action: 'deduped', detail: `concurrent run owns lock (fp ${fp.slice(0, 12)}…)` });
       continue;
     }
@@ -288,9 +402,11 @@ export async function draftIfActionable(verdict) {
       // A dedup-read failure lands here → we do NOT file (fail closed).
       outcomes.push({ container: f.container, action: 'failed', detail: err.message });
     } finally {
-      // Release after the attempt (success OR failure) so the next legitimate
-      // run isn't blocked; the TTL reclaim is the backstop if release fails.
-      releaseDraftLock(fp);
+      // Owner-fenced release after the attempt (success OR failure) so the next
+      // legitimate run isn't blocked; the TTL reclaim is the backstop if release
+      // fails. Passing our token ensures we never delete a lock that was
+      // reclaimed out from under us (cage-match PR #108).
+      releaseDraftLock(fp, lockTok);
     }
   }
   return outcomes;
