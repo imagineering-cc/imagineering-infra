@@ -315,8 +315,9 @@ test('resolveHttpTimeouts: curl<runOnHost monotonicity + integer hold for ALL in
     assert.ok(Number.isInteger(curlMaxTimeSec) && curlMaxTimeSec > 0, `integer/positive for ${JSON.stringify(v)}`);
     assert.ok(curlMaxTimeSec * 1000 < runOnHostMs, `curl<runOnHost for ${JSON.stringify(v)}`);
   }
-  // the injection string collapses to its leading integer, never a shell token
-  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '90; rm -rf /' }).curlMaxTimeSec, 90);
+  // the injection string collapses to its leading integer (ms), never a shell
+  // token: '150000; rm -rf /' → parseInt 150000 ms → ceil(150000/1000) = 150s.
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '150000; rm -rf /' }).curlMaxTimeSec, 150);
 });
 
 test('collapseRepeats: folds identical runs into ×N, leaves singletons alone', () => {
