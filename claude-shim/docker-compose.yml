@@ -21,6 +21,11 @@ services:
       # compose ${VAR} interpolation. The real OAuth token lives ONLY in the
       # encrypted secrets.yaml, never in git as plaintext.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      # deploy-#49 floor: the self-healer's sonnet diagnoses take ~60-93s and
+      # time out against server.js's default 60000ms ceiling. Not a secret, so
+      # versioned here as a literal (not in secrets.yaml). Keep below the
+      # healer's own SHIM_HTTP_TIMEOUT_MS=150000, which must sit above this.
+      - SHIM_TIMEOUT_MS=120000
     ports:
       - "127.0.0.1:8088:8088"   # host-local smoke tests; container callers use the network name
     networks:
