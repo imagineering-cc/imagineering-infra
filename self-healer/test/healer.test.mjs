@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeTier, tierExitCode, maxTier, TIERS } from '../src/tiers.mjs';
-import { extractVerdict, validateVerdict } from '../src/diagnose.mjs';
+import { extractVerdict, validateVerdict, resolveHttpTimeouts } from '../src/diagnose.mjs';
 import { collapseRepeats, assertValidContainerName } from '../src/sensor.mjs';
 import { scrubSecrets, formatVerdict, pingIfNoteworthy, verdictFingerprint, passesCooldown } from '../src/notify.mjs';
 import { mkdtempSync } from 'node:fs';
@@ -279,6 +279,31 @@ test('validateVerdict: coerces malformed finding fields to safe defaults', () =>
   assert.equal(f.proposedAction, 'none');
   assert.equal(f.selfRecovered, false); // 'yes' (string) is not the boolean true
   assert.equal(f.diagnosis, ''); // non-string coerced
+});
+
+test('resolveHttpTimeouts: defaults sit above the 120s shim ceiling, monotonic (deploy #49)', () => {
+  const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts({});
+  assert.equal(curlMaxTimeSec, 150);
+  assert.equal(runOnHostMs, 160_000);
+  // curl must kill BEFORE the outer hard SIGKILL...
+  assert.ok(curlMaxTimeSec * 1000 < runOnHostMs);
+  // ...and AFTER the shim's own 120s ceiling, so the shim fails first (clean
+  // "claude timed out") rather than curl exit 28 discarding a live answer.
+  assert.ok(curlMaxTimeSec * 1000 > 120_000);
+});
+
+test('resolveHttpTimeouts: honors SHIM_HTTP_TIMEOUT_MS, falls back on garbage/non-positive', () => {
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '200000' }).curlMaxTimeSec, 200);
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '200000' }).runOnHostMs, 210_000);
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: 'xyz' }).curlMaxTimeSec, 150); // unparseable ⇒ default
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '0' }).curlMaxTimeSec, 150);   // non-positive ⇒ default
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '-5' }).curlMaxTimeSec, 150);
+});
+
+test('resolveHttpTimeouts: curlMaxTimeSec is an integer (shell-inert interpolation)', () => {
+  const { curlMaxTimeSec } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '95500' });
+  assert.equal(Number.isInteger(curlMaxTimeSec), true);
+  assert.equal(curlMaxTimeSec, 96); // ceil(95500/1000)
 });
 
 test('collapseRepeats: folds identical runs into ×N, leaves singletons alone', () => {

@@ -66,6 +66,15 @@ code encodes the worst tier: `0`=green, `1`=amber, `2`=red, `3`=healer error.
 | `SHIM_URL`     | `http://127.0.0.1:8088/chat`   | claude-shim endpoint (host-local)         |
 | `HEALER_MODEL` | `sonnet`                       | model the shim runs for diagnosis         |
 | `HEALER_TARGETS` | `./targets.json`             | watch-list path                           |
+| `SHIM_HTTP_TIMEOUT_MS` | `150000`               | curl `--max-time` for the shim call; outer SIGKILL is this + 10s |
+
+> **Timeout chain.** The ceilings are monotonic from the inside out —
+> `claude generation < shim (SHIM_TIMEOUT_MS, default 120s on the box) < curl
+> --max-time < runOnHost SIGKILL` — so a too-slow diagnosis fails on the shim
+> with a clean "claude timed out" rather than `curl exit 28` discarding an
+> answer the shim already produced. Keep `SHIM_HTTP_TIMEOUT_MS` above the shim's
+> `SHIM_TIMEOUT_MS`. (Observed live: a 93s sonnet verdict for 4 containers — the
+> old hardcoded 90s curl ceiling threw it away.)
 
 ## The traffic-light leash
 

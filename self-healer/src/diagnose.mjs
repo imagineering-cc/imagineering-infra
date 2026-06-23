@@ -11,6 +11,30 @@ import { normalizeTier, maxTier, TIERS } from './tiers.mjs';
 const DIAGNOSE_MODEL = process.env.HEALER_MODEL || 'sonnet';
 
 /**
+ * Resolve the outbound HTTP timeout chain for the shim call. The ceilings MUST
+ * be monotonic from the inside out so the INNER layer fails first with a clean
+ * error instead of an opaque outer kill:
+ *
+ *   claude generation  <  shim (SHIM_TIMEOUT_MS, default 120s on the box)
+ *                       <  curl --max-time  <  runOnHost hard SIGKILL
+ *
+ * The defaults (150s curl / 160s runOnHost) sit ABOVE the 120s shim ceiling, so
+ * a too-slow diagnosis surfaces as the shim's own "claude timed out after …"
+ * rather than `curl exit 28`. This is the deploy-#49 fix: a legitimate 93s
+ * sonnet verdict was being thrown away by the old hardcoded 90s curl ceiling
+ * (the shim had already answered). curlMaxTimeSec is parsed to an integer so it
+ * stays shell-inert when interpolated into the curl command.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{curlMaxTimeSec: number, runOnHostMs: number}}
+ */
+export function resolveHttpTimeouts(env = process.env) {
+  const raw = Number.parseInt(env.SHIM_HTTP_TIMEOUT_MS ?? '150000', 10);
+  const ms = Number.isFinite(raw) && raw > 0 ? raw : 150_000;
+  return { curlMaxTimeSec: Math.ceil(ms / 1000), runOnHostMs: ms + 10_000 };
+}
+
+/**
  * Resolve + validate the shim endpoint. SHIM_URL is interpolated into a shell
  * command (curl …), so an unvalidated env value would be a command-injection
  * vector (cage-match PR #100: `SHIM_URL='http://x; rm -rf /'`). We require a
@@ -135,8 +159,12 @@ export async function diagnose(signals) {
   // curl ON THE HOST so we hit the shim's localhost bind. Body comes in via
   // stdin (@-) so we never have to quote a multi-KB JSON blob through a shell.
   // SHIM_URL was validated to be a shell-inert loopback http URL at load.
-  const cmd = `curl -s --max-time 90 -H 'content-type: application/json' --data-binary @- '${SHIM_URL}'`;
-  const { stdout, stderr, code } = await runOnHost(cmd, { stdin: body, timeoutMs: 100_000 });
+  // Timeouts are monotonic above the shim's own ceiling so the shim fails first
+  // with a clean error rather than curl killing an answer mid-flight (see
+  // resolveHttpTimeouts). curlMaxTimeSec is an integer ⇒ shell-inert.
+  const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts();
+  const cmd = `curl -s --max-time ${curlMaxTimeSec} -H 'content-type: application/json' --data-binary @- '${SHIM_URL}'`;
+  const { stdout, stderr, code } = await runOnHost(cmd, { stdin: body, timeoutMs: runOnHostMs });
   if (code !== 0) {
     throw new Error(`shim curl failed (exit ${code}): ${stderr.trim() || stdout.trim()}`);
   }
