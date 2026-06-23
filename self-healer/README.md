@@ -185,14 +185,22 @@ grows (the green-auto roadmap step).
   - *on-box:* `spawn('bash', ['-c', SCRIPT, '_', ...args])` — bash binds the
     args to `$1,$2…` positionally; they are never part of the script text, so
     the local shell can't parse them as code.
-  - *remote (ssh):* ssh concatenates its trailing argv into ONE string that the
-    **remote login shell re-parses** — so plain positional args would re-open
-    injection. We therefore **base64-encode every untrusted arg** (the base64
-    alphabet `[A-Za-z0-9+/=]` has no shell metacharacters, so each token
-    survives the second parse as one inert word) and the fixed script
-    base64-DECODEs them internally before use. `base64 -d` runs on the OCI box
-    in both paths, so one fixed script serves on-box and remote. The big JSON
-    body still goes via stdin, never the command line.
+  - *remote (ssh):* ssh has **no argv channel** — it space-joins its entire
+    trailing argv into ONE string that the **remote login shell re-parses**.
+    This breaks naive positional passing two ways: (1) the script (which
+    contains `;` and spaces) would be split, so `_ arg…` never reaches the inner
+    `bash -c` and `$1,$2…` bind to **empty** (the PR #109 bug); and (2) an
+    unescaped untrusted value could re-open injection at the second parse. So we
+    compose the remote command ourselves as `bash -c '<script>' _ <b64> <b64>…`:
+    the developer-controlled **script is single-quoted** (`shSingleQuote`) so it
+    survives as ONE `-c` argument and the positionals bind, and **every
+    untrusted arg is base64-encoded** (alphabet `[A-Za-z0-9+/=]` has no shell
+    metacharacters, so each is one inert word needing no quoting) and
+    base64-DECODEd inside the fixed script. `base64 -d` runs on the OCI box in
+    both paths, so **one fixed script serves on-box and remote**. The big JSON
+    body still goes via stdin, never the command line. The remote path is
+    covered by a wire-re-tokenization test AND a live `ssh localhost` round-trip
+    asserting `$1` actually binds.
   - `runOnHost(cmdString)` is retained for fixed/trusted command strings; the
     self-healer's own untrusted-input call sites (sensor, diagnose) all use the
     typed primitive.
