@@ -17,12 +17,118 @@
 // deliberately separate, cage-built step. This is its safe precursor.
 
 import { createHash } from 'node:crypto';
+import { mkdirSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { scrubSecrets } from './notify.mjs';
 import { repoForContainer } from './repos.mjs';
 
 const GH_API = 'https://api.github.com';
 const LABEL = 'self-healer';
 const ZWSP = '​'; // zero-width space, to neutralize @mentions
+
+// Single-box atomic lock for the green-draft race window.
+//
+// The fingerprint-marker dedup (alreadyFiled) reconciles against GitHub's open
+// issues, but GitHub's List API is eventually-consistent and the check-then-
+// create sequence has no atomic step — two near-simultaneous healer runs on the
+// SAME box (an overlapping cron tick + a manual run) can both read "not filed"
+// and both create. This lock closes that window: each per-finding draft first
+// takes a per-fingerprint lock; exactly one caller wins, the others SKIP.
+//
+// Primitive: `mkdirSync(lockPath)` — directory creation is atomic on POSIX
+// filesystems (the kernel guarantees a single winner; concurrent callers get
+// EEXIST). The lock is keyed on the SAME findingFingerprint the marker dedup
+// uses, so distinct findings never contend and the two layers agree by
+// construction. The lock guards the short race window; the marker guards across
+// longer spans (it survives a crash, a TTL reclaim, or a process restart). The
+// lock is ADDITIVE to the marker, never a replacement.
+//
+// SCOPE — this is a SINGLE-HOST lock. The real deployment is one OCI box (cron +
+// manual runs), which is exactly what this covers. It does NOT provide cross-
+// host / distributed mutual exclusion; if green-auto ever runs on multiple hosts
+// concurrently, a shared store (Redis SETNX, a GitHub-side claim, etc.) would be
+// required. Documented as future work.
+
+/** State dir, resolved the SAME way as notify.mjs's passesCooldown so the
+ * healer keeps all its on-box state in one place. */
+function lockStateDir() {
+  return process.env.HEALER_STATE_DIR || '/tmp/self-healer';
+}
+
+/** Lock TTL in ms. A crashed run must not block a fingerprint forever, so a
+ * lock older than the TTL is reclaimable. Env knob HEALER_LOCK_TTL_MIN (minutes,
+ * default 10). A non-positive / non-finite value falls back to the default
+ * rather than disabling staleness — never leave a fingerprint permanently
+ * lockable-but-unreclaimable. */
+function lockTtlMs() {
+  const min = Number.parseInt(process.env.HEALER_LOCK_TTL_MIN ?? '10', 10);
+  return (Number.isFinite(min) && min > 0 ? min : 10) * 60_000;
+}
+
+/** Path of the per-fingerprint lock directory. */
+function lockPath(fp) {
+  return join(lockStateDir(), `draft-lock-${fp}`);
+}
+
+/**
+ * Try to atomically acquire the per-fingerprint draft lock.
+ *
+ * Returns `true` if THIS caller now owns the lock (proceed to file), `false` if
+ * another live run owns it (skip). Behaviour:
+ *   - mkdir succeeds                → acquired (true).
+ *   - mkdir throws EEXIST, lock STALE (mtime older than TTL) → reclaim it
+ *     (remove + re-mkdir) and acquire. If the reclaim mkdir itself loses an
+ *     EEXIST race to a concurrent reclaimer, the other run owns it → skip
+ *     (false).
+ *   - mkdir throws EEXIST, lock FRESH → another run owns it → skip (false).
+ *   - any OTHER (unexpected) error   → FAIL CLOSED: rethrow so the caller does
+ *     NOT file (consistent with the dedup read's "can't confirm → don't write").
+ *
+ * Note `false` is a clean "someone else owns it, skip"; only an UNEXPECTED error
+ * propagates, which the caller treats as fail-closed (no filing).
+ * @returns {boolean}
+ */
+export function acquireDraftLock(fp, nowMs = Date.now()) {
+  const path = lockPath(fp);
+  mkdirSync(lockStateDir(), { recursive: true });
+  try {
+    mkdirSync(path); // atomic: exactly one caller wins
+    return true;
+  } catch (err) {
+    if (err && err.code === 'EEXIST') {
+      // Lock exists. Reclaim only if it's stale (a crashed prior run).
+      let ageMs;
+      try {
+        ageMs = nowMs - statSync(path).mtimeMs;
+      } catch {
+        // The lock vanished between mkdir and stat (a concurrent release/
+        // reclaim). Re-attempt acquire ONCE; treat its outcome as authoritative.
+        try { mkdirSync(path); return true; } catch (e2) {
+          if (e2 && e2.code === 'EEXIST') return false; // someone else re-took it
+          throw e2; // unexpected → fail closed
+        }
+      }
+      if (ageMs > lockTtlMs()) {
+        // Stale: reclaim. rm then re-mkdir; if a concurrent reclaimer beats us
+        // to the re-mkdir, they own it and we skip.
+        try { rmSync(path, { recursive: true, force: true }); } catch { /* tolerate; mkdir below decides */ }
+        try { mkdirSync(path); return true; } catch (e3) {
+          if (e3 && e3.code === 'EEXIST') return false;
+          throw e3; // unexpected → fail closed
+        }
+      }
+      return false; // fresh lock held by a live run → skip
+    }
+    throw err; // unexpected error → fail closed (do NOT file)
+  }
+}
+
+/** Release the per-fingerprint lock after a filing ATTEMPT completes (success or
+ * failure), so the next legitimate run isn't blocked. Best-effort: a release
+ * failure must not throw (the TTL reclaim is the backstop). */
+export function releaseDraftLock(fp) {
+  try { rmSync(lockPath(fp), { recursive: true, force: true }); } catch { /* TTL reclaims */ }
+}
 
 function token() {
   return process.env.HEALER_GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
@@ -147,6 +253,23 @@ export async function draftIfActionable(verdict) {
       continue;
     }
     const { title, body, fp } = buildIssue(f);
+
+    // Atomic single-box lock: take it BEFORE the dedup read + create so a
+    // concurrent run on the same box can't slip between our check and create.
+    // A clean loss (false) = another live run owns this fingerprint → skip.
+    // An UNEXPECTED lock error throws → caught below → fail closed (no filing).
+    let locked = false;
+    try {
+      locked = acquireDraftLock(fp);
+    } catch (err) {
+      outcomes.push({ container: f.container, action: 'failed', detail: `lock error (fail-closed): ${err.message}` });
+      continue;
+    }
+    if (!locked) {
+      outcomes.push({ container: f.container, action: 'deduped', detail: `concurrent run owns lock (fp ${fp.slice(0, 12)}…)` });
+      continue;
+    }
+
     try {
       await ensureLabel(repo); // before the dedup read, so the label filter is valid
       if (await alreadyFiled(repo, fp)) {
@@ -164,6 +287,10 @@ export async function draftIfActionable(verdict) {
     } catch (err) {
       // A dedup-read failure lands here → we do NOT file (fail closed).
       outcomes.push({ container: f.container, action: 'failed', detail: err.message });
+    } finally {
+      // Release after the attempt (success OR failure) so the next legitimate
+      // run isn't blocked; the TTL reclaim is the backstop if release fails.
+      releaseDraftLock(fp);
     }
   }
   return outcomes;
