@@ -20,6 +20,13 @@ export const CONFINEMENT_FLAGS = Object.freeze([
   '--cpus=2',
 ]);
 
+/** Default non-root uid:gid the cage forces. Pinned by the CAGE, not delegated to
+ * the image's USER directive (cage-match PR #111, Maxwell F1 + Carnot HIGH): an
+ * agent image built without a USER line would otherwise run as ROOT in the cage.
+ * Enforcing --user here makes non-root true regardless of image hygiene, and lets
+ * the escape probe prove the CAGE (start from a root image) rather than the image. */
+export const CAGE_UID_GID = '1000:1000';
+
 /**
  * Build the argv to run `cmd …args` inside the cage.
  *
@@ -32,9 +39,10 @@ export const CONFINEMENT_FLAGS = Object.freeze([
  * @param {Record<string,string>} [o.env]  extra env (e.g. a repo-scoped GH token). NEVER host secrets.
  * @param {string} o.cmd          the command to run (e.g. "claude" or, in the probe, "sh")
  * @param {string[]} [o.args]     args to cmd
+ * @param {string} [o.userGid]    forced non-root uid:gid (default CAGE_UID_GID); never trusts the image
  * @returns {{bin: string, argv: string[]}}
  */
-export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env = {}, cmd, args = [] }) {
+export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env = {}, cmd, args = [], userGid = CAGE_UID_GID }) {
   if (!image) throw new Error('cage: image required');
   if (!network) throw new Error('cage: internal network required');
   if (!workdirHost) throw new Error('cage: workdirHost required');
@@ -42,6 +50,8 @@ export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env
   if (!cmd) throw new Error('cage: cmd required');
 
   const argv = ['run', ...CONFINEMENT_FLAGS];
+  // Force non-root at the CAGE, never trusting the image's USER (cage-match #111).
+  argv.push('--user', userGid);
   if (name) argv.push('--name', name);
 
   // Egress: deny-all internal network is the backstop; the proxy is the only

@@ -14,7 +14,7 @@
 //
 // Exit code is the caged container's exit code (so the probe can assert it).
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { buildCageArgv } from './cage.mjs';
 
 const sep = process.argv.indexOf('--');
@@ -23,6 +23,25 @@ if (sep === -1 || sep === process.argv.length - 1) {
   process.exit(2);
 }
 const [cmd, ...args] = process.argv.slice(sep + 1);
+
+// FAIL CLOSED on the egress boundary: the deny-all backstop is the network being
+// `--internal`. cage.mjs can only put the NAME in the argv — it cannot know the
+// network is actually internal. A caller (or a future green-auto bug) that passes
+// a normal bridge network would keep every proxy-env flag yet retain direct
+// egress (cage-match PR #111, Carnot). So verify Internal==true at spawn time and
+// refuse otherwise — the one boundary property the pure builder can't assert.
+function assertInternalNetwork(network) {
+  const r = spawnSync('docker', ['network', 'inspect', network, '--format', '{{.Internal}}'], { encoding: 'utf8' });
+  if (r.status !== 0) {
+    process.stderr.write(`cage: cannot inspect network "${network}" (refusing to spawn): ${(r.stderr || '').trim()}\n`);
+    process.exit(3);
+  }
+  if (r.stdout.trim() !== 'true') {
+    process.stderr.write(`cage: network "${network}" is NOT --internal (Internal=${r.stdout.trim()}); egress backstop absent — refusing to spawn.\n`);
+    process.exit(3);
+  }
+}
+assertInternalNetwork(process.env.CAGE_NETWORK);
 
 const { bin, argv } = buildCageArgv({
   image: process.env.CAGE_IMAGE,

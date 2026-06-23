@@ -91,6 +91,31 @@ else
   ok "egress-direct-ip: direct (proxy-bypass) egress blocked"
 fi
 
+# egress-ipv6: a public IPv6 literal, direct. If the box has no v6 this fails too
+# (still blocked); the point is the internal net must not provide a v6 escape
+# where the v4 path is closed (cage-match #111, Kelvin + Carnot).
+if cage curl -sS --fail --max-time 6 --noproxy '*' -g -o /dev/null 'https://[2606:4700:4700::1111]' >/dev/null 2>&1; then
+  bad "egress-ipv6: reached a public IPv6 directly (CAGE BROKEN OPEN — v6 egress leaks)"
+else
+  ok "egress-ipv6: direct IPv6 egress blocked"
+fi
+
+# egress-gateway: the docker bridge gateway / host services must be unreachable
+# from the internal net (an internal net has no gateway, so this must fail).
+if cage curl -sS --fail --max-time 6 --noproxy '*' -o /dev/null http://172.17.0.1 >/dev/null 2>&1; then
+  bad "egress-gateway: reached docker bridge gateway 172.17.0.1 (CAGE BROKEN OPEN — host reachable)"
+else
+  ok "egress-gateway: docker bridge gateway unreachable"
+fi
+
+# egress-host-internal: host.docker.internal must NOT resolve/route (we never pass
+# --add-host); an internal net + no host mapping means the host is unnamed+unrouted.
+if cage curl -sS --fail --max-time 6 --noproxy '*' -o /dev/null http://host.docker.internal >/dev/null 2>&1; then
+  bad "egress-host-internal: reached host.docker.internal (CAGE BROKEN OPEN — host mapped in)"
+else
+  ok "egress-host-internal: host.docker.internal unreachable"
+fi
+
 # fs-host-secret: host secrets must not be visible inside the cage
 if cage sh -c 'cat /etc/shadow' >/dev/null 2>&1; then
   bad "fs-host-secret: read /etc/shadow"
@@ -116,12 +141,21 @@ if cage sh -c 'command -v sudo && sudo -n id' >/dev/null 2>&1; then
 else
   ok "priv-esc: no sudo path"
 fi
-# running as non-root
+# priv-esc CONTROL: the bare probe image is ROOT (uid 0). This makes the non-root
+# assertion below prove the CAGE's --user flag, not the image's USER directive
+# (cage-match #111, Carnot — the probe must remove the favorable initial state).
+bare_uid="$(docker run --rm "$PROBE_IMG" id -u 2>/dev/null | tr -d '[:space:]')"
+if [ "$bare_uid" = "0" ]; then
+  ok "priv-esc control: bare image is root (uid=0) — so non-root below is the cage's doing"
+else
+  bad "priv-esc control: bare image uid='$bare_uid' (expected 0; probe no longer falsifies the cage)"
+fi
+# running as non-root — forced by the cage's --user, NOT by the (root) image
 uid="$(cage sh -c 'id -u' 2>/dev/null | tr -d '[:space:]')"
 if [ "$uid" = "0" ] || [ -z "$uid" ]; then
-  bad "priv-esc: running as uid='$uid' (want non-zero)"
+  bad "priv-esc: running as uid='$uid' (cage failed to force non-root)"
 else
-  ok "priv-esc: non-root (uid=$uid)"
+  ok "priv-esc: cage forced non-root (uid=$uid) despite a root image"
 fi
 
 # docker-escape: the docker socket must not be mounted
@@ -146,6 +180,18 @@ if cage sh -c 'echo hello > /work/probe.txt && cat /work/probe.txt' 2>/dev/null 
   ok "workdir-rw: /work writable+readable"
 else
   bad "workdir-rw: /work not writable (cage broken shut)"
+fi
+
+echo
+echo "=== CAGE SELF-DEFENSE (run-cage refuses an un-internal network) ==="
+# The deny-all egress backstop IS the network being --internal. run-cage.mjs must
+# refuse to spawn on a non-internal network rather than silently leaking egress
+# (cage-match #111, Carnot). Prove it: point the cage at the egress (bridge) net
+# and assert it REFUSES (exit 3), never runs.
+if CAGE_NETWORK="$NET_EGR" node run-cage.mjs -- sh -c 'echo should-not-run' >/dev/null 2>&1; then
+  bad "self-defense: ran on a NON-internal network (egress backstop bypassed)"
+else
+  ok "self-defense: refused to spawn on a non-internal network"
 fi
 
 echo
