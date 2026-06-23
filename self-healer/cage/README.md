@@ -1,0 +1,102 @@
+# green-auto cage — the boundary contract
+
+> **Status: boundary spec + escape probe.** The cage is the *prerequisite* to
+> turning on green-auto. green-auto itself (the codegen agent that writes a fix →
+> opens a PR → cage-match → auto-merge) is **not enabled** until the escape probe
+> below passes on the production box. *Build the cage before you spawn the monster.*
+
+## What is being caged, and why
+
+green-auto's worker is a **headless `claude -p` codegen agent with tool
+permissions** (it edits files, runs `git`, runs `gh`). It is spawned from a
+*log diagnosis*, so its entire input is **attacker-influenceable**:
+
+- a malicious container log line → became the self-healer's `diagnosis`/`evidence`
+  (the `green-draft` issue body is built from exactly these fields);
+- the target repo's own source — which the agent reads to write its patch — can
+  carry prompt-injection aimed at the agent.
+
+So the threat is a **prompt-injection-into-codegen** surface with **write + network
+capability**. The mechanism (the model, the prompt, the tool-loop) is *not* the
+boundary. The boundary is: *even if the agent is fully subverted mid-run, what can
+it touch?* The cage's job is to make that answer "only its own throwaway clone and
+two allowlisted hosts" — and to **prove it by attempting the escape**, never by
+reading a config.
+
+## Mechanism (box-grounded — see ADR below)
+
+An ephemeral Docker container:
+
+| Property | Flag | Boundary it enforces |
+|---|---|---|
+| non-root | image `USER`, `--user` | no host-uid authority |
+| no new privileges | `--security-opt=no-new-privileges` | setuid/sudo can't escalate |
+| drop all caps | `--cap-drop=ALL` | no raw sockets, mount, ptrace, … |
+| read-only rootfs | `--read-only` | host fs (in-image) immutable |
+| only the clone is writable | one named volume / tmpfs at the workdir | writes can't leave the workdir |
+| no docker socket | (never mounted) | can't control the daemon / sibling containers |
+| ephemeral | `--rm` + fresh volume per run | nothing persists across runs |
+| pid / mem caps | `--pids-limit`, `--memory` | a fork/alloc bomb can't take the box |
+| **egress denied** | `--network <internal>` | **kernel-level: no direct off-box route, no external DNS** |
+| **egress allowlisted** | `HTTPS_PROXY → egress-proxy` | the proxy CONNECTs only to the named hosts |
+
+Egress is **layered**: the internal network denies *all* direct egress (verified:
+`curl https://example.com` → "Could not resolve host"); the only reachable name on
+that network is the **egress-proxy**, which forwards CONNECT **only** to an explicit
+host allowlist. A denylist is a sieve; this is allow-by-exact-host.
+
+## The contract — what the escape probe asserts
+
+Run `cage/escape-probe.sh` **on the production box**. It spawns the real cage around
+each case below. The probe is the gate; a green ruleset grep is **not**.
+
+### MUST FAIL (the escapes — each asserts non-success)
+
+| id | attempt | expected |
+|---|---|---|
+| `egress-forbidden` | `curl https://example.com` (a non-allowlisted host) | blocked (DNS/connit fails) |
+| `egress-metadata` | `curl http://169.254.169.254/…` (cloud metadata) | blocked |
+| `egress-direct-ip` | `curl https://140.82.x.x` (allowlisted host's IP, *bypassing the proxy*) | blocked (only the proxy has egress) |
+| `fs-host-secret` | read the OAuth token / `self-healer.env` / `/etc/shadow` / `~/.ssh` | not present (never mounted) |
+| `fs-host-write` | write outside the workdir (`/`, `/etc`, another path) | read-only → EROFS |
+| `priv-esc` | `sudo`, a setuid binary, raise a capability | denied (no-new-privs, cap-drop, non-root) |
+| `docker-escape` | reach `/var/run/docker.sock` | not present |
+
+### MUST SUCCEED (or the cage is uselessly tight — each asserts success)
+
+| id | attempt | expected |
+|---|---|---|
+| `allow-inference` | reach the inference brain **through the proxy** | 2xx/expected |
+| `allow-github` | reach `api.github.com` **through the proxy** | 2xx |
+| `workdir-rw` | write+read a file in the clone workdir | ok |
+
+A cage that fails an escape-FAIL case is **broken open** (the dangerous direction).
+A cage that fails a MUST-SUCCEED case is **broken shut** (green-auto can't work, but
+it's safe) — fix forward, never relax an escape gate to make a success case pass.
+
+## Credential scope (boundary, partly outside the OS cage)
+
+The GitHub token handed to the agent MUST be scoped to the **one** target repo
+(fine-grained PAT / installation token), so a fully-subverted agent that *does* open
+a malicious PR still cannot reach another repo. The OS cage bounds *reachability*;
+the token scope bounds *authority*. Both are required. Tracked separately from this
+probe.
+
+## ADR — why Docker, not bwrap/systemd (deviates from the original plan)
+
+The original plan named *bwrap sandbox user + systemd confinement + egress filter*.
+Verified on the box (`149.118.69.221`, Ubuntu 24.04 aarch64):
+
+- **bwrap is absent** (so is firejail). It would need an `apt install` (host
+  mutation) and still **can't allowlist egress** — only all-or-nothing
+  `--unshare-net`; the agent needs *some* network (inference + GitHub).
+- **systemd's `IPAddressDeny`/`DynamicUser`** (the egress filter + sandbox uid)
+  require the **system** manager = **root**. The healer cron runs as **`nick`
+  (non-root)**; `systemd-run --user` does *not* support those properties.
+- **Docker is already the box's delegated-confinement primitive** — `nick` is in
+  the `docker` group and the shim, claudius, and DF are all caged this way. It
+  delivers every property in the table above with **no new sudo and no new
+  package**, and matches the existing claude-shim cage precedent.
+
+Net: Docker is the production-substrate-correct mechanism here. The egress filter
+that bwrap/systemd would have provided is delivered by `--internal` + the proxy.

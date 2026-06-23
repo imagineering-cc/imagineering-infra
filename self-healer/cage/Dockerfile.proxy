@@ -1,0 +1,10 @@
+# egress-proxy image — the cage's hostname-allowlist gate. Tiny on purpose: the
+# only logic is the CONNECT allowlist in egress-proxy.mjs.
+FROM node:20-slim
+# node:20-slim already ships a non-root `node` user (uid 1000); reuse it rather
+# than adding one (Debian's base also reserves a system `proxy` user, uid 13).
+WORKDIR /app
+COPY egress-proxy.mjs ./
+USER node
+EXPOSE 3128
+CMD ["node", "egress-proxy.mjs"]

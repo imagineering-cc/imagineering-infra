@@ -1,0 +1,14 @@
+# probe image — a representative stand-in for the codegen agent, carrying just
+# enough tools to ATTEMPT each escape in cage/README.md. The confinement is
+# enforced by the `docker run` flags (cage.mjs), which are largely image-
+# independent, so this image proves the cage holds for the real agent image too.
+#
+# It deliberately ships a non-root user and NO sudo. If an escape passes here it
+# would pass for the agent; if it fails here the cage holds.
+FROM alpine:3.20
+RUN apk add --no-cache curl coreutils
+# A non-root user with a real shell so the fs/priv probes can run as the agent would.
+RUN adduser -D -s /bin/sh agent
+USER agent
+WORKDIR /work
+CMD ["sh"]
