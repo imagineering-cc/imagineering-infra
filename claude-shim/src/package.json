@@ -1,0 +1,11 @@
+{
+  "name": "claude-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP front door to Max-plan headless Claude Code (claude -p) for OCI container callers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
