@@ -1,7 +1,7 @@
 // diagnose.mjs — send the sensor bundle to the claude-shim brain and parse
 // the structured verdict back out, validating it against the closed tier set.
 
-import { runOnHost } from './host.mjs';
+import { runOnHostScript } from './host.mjs';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.mjs';
 import { normalizeTier, maxTier, TIERS } from './tiers.mjs';
 
@@ -22,25 +22,41 @@ const DIAGNOSE_MODEL = process.env.HEALER_MODEL || 'sonnet';
  * a too-slow diagnosis surfaces as the shim's own "claude timed out after …"
  * rather than `curl exit 28`. This is the deploy-#49 fix: a legitimate 93s
  * sonnet verdict was being thrown away by the old hardcoded 90s curl ceiling
- * (the shim had already answered). curlMaxTimeSec is parsed to an integer so it
- * stays shell-inert when interpolated into the curl command.
+ * (the shim had already answered). curlMaxTimeSec is no longer interpolated into
+ * a shell string (it's a base64 positional arg now), but we still keep it an
+ * integer for clean `--max-time` semantics.
+ *
+ * #50 FLOOR: the healer can't introspect the shim's OWN ceiling (SHIM_TIMEOUT_MS,
+ * 120s on the box). A too-small SHIM_HTTP_TIMEOUT_MS would silently recreate the
+ * deploy-#49 bug (curl killing the call before the shim can answer). So we CLAMP
+ * the effective ms up to at least the shim's 120s ceiling and warn on stderr when
+ * we do. This is monotonicity-preserving: runOnHostMs stays ms+10s, so the
+ * existing curl<runOnHost invariant tests still hold for every input.
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {{curlMaxTimeSec: number, runOnHostMs: number}}
  */
+const SHIM_CEILING_MS = 120_000; // SHIM_TIMEOUT_MS on the box; the curl --max-time floor
 export function resolveHttpTimeouts(env = process.env) {
   const raw = Number.parseInt(env.SHIM_HTTP_TIMEOUT_MS ?? '150000', 10);
-  const ms = Number.isFinite(raw) && raw > 0 ? raw : 150_000;
+  const parsed = Number.isFinite(raw) && raw > 0 ? raw : 150_000;
+  const ms = Math.max(parsed, SHIM_CEILING_MS);
+  if (ms !== parsed) {
+    process.stderr.write(
+      `[self-healer] SHIM_HTTP_TIMEOUT_MS=${parsed}ms is below the shim's ${SHIM_CEILING_MS}ms ceiling; ` +
+      `clamping to ${ms}ms so curl can't kill an answer the shim is still producing (deploy-#49).\n`,
+    );
+  }
   return { curlMaxTimeSec: Math.ceil(ms / 1000), runOnHostMs: ms + 10_000 };
 }
 
 /**
- * Resolve + validate the shim endpoint. SHIM_URL is interpolated into a shell
- * command (curl …), so an unvalidated env value would be a command-injection
- * vector (cage-match PR #100: `SHIM_URL='http://x; rm -rf /'`). We require a
- * well-formed http URL pointing at loopback — which is also the shim's actual
- * binding (127.0.0.1:8088), so this both closes the injection surface AND
- * encodes a true invariant.
+ * Resolve + validate the shim endpoint. SHIM_URL is no longer interpolated into
+ * a shell string (it's a base64 positional arg to the fixed curl script now), so
+ * this validation is no longer load-bearing for injection. We keep it because it
+ * still encodes a TRUE invariant: claude-shim binds 127.0.0.1:8088 only, so a
+ * non-loopback URL is a misconfiguration we want to fail fast on, not pass to a
+ * curl that would just hang. Defence-in-depth, not the sole gate.
  */
 function resolveShimUrl() {
   const raw = process.env.SHIM_URL || 'http://127.0.0.1:8088/chat';
@@ -158,13 +174,20 @@ export async function diagnose(signals) {
 
   // curl ON THE HOST so we hit the shim's localhost bind. Body comes in via
   // stdin (@-) so we never have to quote a multi-KB JSON blob through a shell.
-  // SHIM_URL was validated to be a shell-inert loopback http URL at load.
-  // Timeouts are monotonic above the shim's own ceiling so the shim fails first
-  // with a clean error rather than curl killing an answer mid-flight (see
-  // resolveHttpTimeouts). curlMaxTimeSec is an integer ⇒ shell-inert.
+  // #46a: the URL and --max-time are passed as base64 positional args ($1,$2)
+  // decoded inside a FIXED script, so neither can be a shell-injection vector
+  // even though SHIM_URL is env-derived. Timeouts are monotonic above the shim's
+  // own ceiling (now floor-clamped, #50) so the shim fails first with a clean
+  // error rather than curl killing an answer mid-flight (see resolveHttpTimeouts).
   const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts();
-  const cmd = `curl -s --max-time ${curlMaxTimeSec} -H 'content-type: application/json' --data-binary @- '${SHIM_URL}'`;
-  const { stdout, stderr, code } = await runOnHost(cmd, { stdin: body, timeoutMs: runOnHostMs });
+  const curlScript =
+    '__url=$(printf %s "$1" | base64 -d); __mt=$(printf %s "$2" | base64 -d); ' +
+    "curl -s --max-time \"$__mt\" -H 'content-type: application/json' --data-binary @- \"$__url\"";
+  const { stdout, stderr, code } = await runOnHostScript(
+    curlScript,
+    [SHIM_URL, String(curlMaxTimeSec)],
+    { stdin: body, timeoutMs: runOnHostMs },
+  );
   if (code !== 0) {
     throw new Error(`shim curl failed (exit ${code}): ${stderr.trim() || stdout.trim()}`);
   }

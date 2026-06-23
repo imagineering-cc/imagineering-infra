@@ -301,9 +301,13 @@ test('resolveHttpTimeouts: honors SHIM_HTTP_TIMEOUT_MS, falls back on garbage/no
 });
 
 test('resolveHttpTimeouts: curlMaxTimeSec is an integer (shell-inert interpolation)', () => {
-  const { curlMaxTimeSec } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '95500' });
+  // Uses an ABOVE-floor input so this keeps proving its named property (integer
+  // /shell-inert), not the #50 floor — the clamp itself is asserted in
+  // host_typed_argv.test.mjs. (Was '95500'→96; 95500ms is below the 120s shim
+  // floor resolveHttpTimeouts now clamps, so it no longer round-trips to 96.)
+  const { curlMaxTimeSec } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '200000' });
   assert.equal(Number.isInteger(curlMaxTimeSec), true);
-  assert.equal(curlMaxTimeSec, 96); // ceil(95500/1000)
+  assert.equal(curlMaxTimeSec, 200); // ceil(200000/1000)
 });
 
 test('resolveHttpTimeouts: curl<runOnHost monotonicity + integer hold for ALL inputs, not just the default', () => {

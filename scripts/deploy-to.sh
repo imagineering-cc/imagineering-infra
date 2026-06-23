@@ -323,6 +323,43 @@ deploy_notify() {
     echo "  Health:   curl https://notify.imagineering.cc/health"
 }
 
+deploy_claude_shim() {
+    echo "Deploying claude-shim (Max-plan inference endpoint)..."
+
+    local SHIM_SECRETS="$REPO_ROOT/claude-shim/secrets.yaml"
+    if [ ! -f "$SHIM_SECRETS" ]; then
+        echo "ERROR: claude-shim/secrets.yaml not found"
+        echo "Create from claude-shim/secrets.yaml.example and encrypt with: sops -e -i claude-shim/secrets.yaml"
+        return 1
+    fi
+
+    # Decrypt once, then route every value through dotenv_quote so a secret with
+    # dotenv-significant bytes survives docker compose's dotenv parser intact
+    # (see deploy_outline for rationale).
+    echo "Generating .env from encrypted secrets..."
+    local SHIM_PLAINTEXT
+    SHIM_PLAINTEXT=$(sops -d "$SHIM_SECRETS")
+    shim_field() { echo "$SHIM_PLAINTEXT" | yq -r "$1 // \"\""; }
+    {
+        printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(dotenv_quote "$(shim_field '.claude_code_oauth_token')")"
+    } > "$REPO_ROOT/claude-shim/.env"
+
+    ssh "$REMOTE" "mkdir -p ~/apps/claude-shim"
+    rsync -avz --delete --exclude 'secrets.yaml' "$REPO_ROOT/claude-shim/" "$REMOTE":~/apps/claude-shim/
+
+    rm -f "$REPO_ROOT/claude-shim/.env"
+
+    # Ensure shared network exists (consumers reach it as http://claude-shim:8088).
+    ssh "$REMOTE" "docker network inspect imagineering >/dev/null 2>&1 || docker network create imagineering"
+
+    # Builds from its Dockerfile (not a published image), so build+up, not pull.
+    ssh "$REMOTE" "cd ~/apps/claude-shim && docker compose build && docker compose up -d"
+
+    echo "claude-shim deployed!"
+    echo "  Network URL (consumers): http://claude-shim:8088/chat"
+    echo "  Health (host-local):     curl 127.0.0.1:8088/health"
+}
+
 deploy_familiars_server() {
     echo "Deploying familiars-server..."
 
@@ -1369,6 +1406,9 @@ case $SERVICE in
         ;;
     notify)
         deploy_notify
+        ;;
+    claude-shim|shim)
+        deploy_claude_shim
         ;;
     familiars-server|familiars)
         deploy_familiars_server
