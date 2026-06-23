@@ -83,21 +83,44 @@ export function runOnHost(cmd, { stdin, timeoutMs = 70_000 } = {}) {
 }
 
 /**
+ * POSIX single-quote a string so an arbitrary shell re-parses it as ONE literal
+ * word: wrap in single quotes and replace each `'` with `'\''` (close-quote,
+ * escaped-quote, re-open). The result contains no shell-active character outside
+ * the quotes, so a second (remote login) shell parse yields exactly the input.
+ * @param {string} s
+ * @returns {string}
+ */
+export function shSingleQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Build the spawn argv for {@link runOnHostScript} WITHOUT spawning. Exported so
  * tests can assert — without touching a real process — that untrusted values
  * never enter the script text, only the positional-arg tail (as base64).
  *
  * The contract: `fixedScript` is a constant string the developer wrote; `args`
  * are untrusted runtime values. Each arg is base64-encoded so it survives every
- * shell parse on the way to the box as inert data:
+ * shell parse on the way to the box as inert data. The TWO paths bind those
+ * positionals VERY differently, and conflating them was the PR #109 cage-match
+ * bug (remote $1/$2/$3 came back EMPTY):
  *
- *   - on-box:  bash binds $0='_', $1=b64(arg0), $2=b64(arg1)… positionally.
- *     The args are passed AFTER the script text, never spliced INTO it, so the
- *     local shell never parses them as code.
- *   - remote:  ssh concatenates ALL of its trailing argv into ONE string and
- *     the REMOTE login shell re-parses that string. base64's alphabet
- *     ([A-Za-z0-9+/=]) contains no shell metacharacters, so even after that
- *     second parse each base64 token survives as a single word — inert.
+ *   - on-box:  `spawn('bash', ['-c', SCRIPT, '_', ...b64])`. Node hands bash a
+ *     real argv VECTOR — no intermediate shell — so bash binds $0='_',
+ *     $1=b64(arg0), $2=b64(arg1)… positionally. The args are passed AFTER the
+ *     script text, never spliced INTO it, so the local shell never parses them
+ *     as code, AND the binding works because there's a true argv channel.
+ *   - remote:  ssh has NO argv channel. It SPACE-JOINS its entire trailing argv
+ *     into one string and the REMOTE login shell re-parses that string. So
+ *     `ssh host bash -c SCRIPT _ b64` becomes the remote line
+ *     `bash -c SCRIPT _ b64` — and because SCRIPT contains `;`/spaces, the
+ *     remote shell splits it: `_ b64` never reaches the INNER `bash -c`, and
+ *     $1/$2/$3 bind to nothing. The fix is to compose the remote command
+ *     OURSELVES as a single string with the script SINGLE-QUOTED, so the remote
+ *     shell sees `bash -c '<script>' _ <b64> <b64>` → bash + -c + ONE script
+ *     word + positional args, and the inner bash binds $1=<b64> correctly.
+ *     The script is developer-controlled, so single-quoting it is safe; the b64
+ *     args are shell-inert ([A-Za-z0-9+/=] only) and need no quoting.
  *
  * Either way the FIXED_SCRIPT base64-DECODEs each positional ($1,$2…) back to
  * the real value internally before use (`v=$(printf %s "$1" | base64 -d)`).
@@ -111,10 +134,15 @@ export function runOnHost(cmd, { stdin, timeoutMs = 70_000 } = {}) {
  */
 export function buildHostScriptArgv(fixedScript, args = [], host = process.env.HEALER_HOST) {
   const b64 = args.map((a) => Buffer.from(String(a), 'utf8').toString('base64'));
-  // '_' is $0 (a conventional placeholder name); the b64 values become $1, $2…
-  return host
-    ? { bin: 'ssh', argv: ['-o', 'ConnectTimeout=8', host, 'bash', '-c', fixedScript, '_', ...b64] }
-    : { bin: 'bash', argv: ['-c', fixedScript, '_', ...b64] };
+  if (!host) {
+    // '_' is $0 (a conventional placeholder name); the b64 values become $1, $2…
+    return { bin: 'bash', argv: ['-c', fixedScript, '_', ...b64] };
+  }
+  // Remote: hand ssh ONE command string whose script is single-quoted so the
+  // remote login shell preserves it as a single `-c` argument and binds the
+  // positional b64 args (which are already shell-inert) to the inner bash.
+  const remoteCmd = `bash -c ${shSingleQuote(fixedScript)} _ ${b64.join(' ')}`.trimEnd();
+  return { bin: 'ssh', argv: ['-o', 'ConnectTimeout=8', host, remoteCmd] };
 }
 
 /**

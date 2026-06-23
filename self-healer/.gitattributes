@@ -1,0 +1,7 @@
+# Treat all JS module sources as text so a stray non-ASCII byte (or a future
+# Unicode comment) never trips git's binary heuristic and hides a security-
+# relevant diff from review. (PR #109 cage-match LOW: host_typed_argv.test.mjs
+# once showed as 'binary' in the diff.)
+*.mjs text
+*.js  text
+*.md  text
