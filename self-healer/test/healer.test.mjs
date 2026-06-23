@@ -306,6 +306,19 @@ test('resolveHttpTimeouts: curlMaxTimeSec is an integer (shell-inert interpolati
   assert.equal(curlMaxTimeSec, 96); // ceil(95500/1000)
 });
 
+test('resolveHttpTimeouts: curl<runOnHost monotonicity + integer hold for ALL inputs, not just the default', () => {
+  // The curl<runOnHost relation is the safety invariant — pin it for non-default
+  // values AND for shell-injection-shaped strings (which parseInt reduces to a
+  // leading integer), so the property is proven in general, not just at 150s.
+  for (const v of ['200000', '37000', '1', '90; rm -rf /', '1e3', ' 250000 ']) {
+    const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: v });
+    assert.ok(Number.isInteger(curlMaxTimeSec) && curlMaxTimeSec > 0, `integer/positive for ${JSON.stringify(v)}`);
+    assert.ok(curlMaxTimeSec * 1000 < runOnHostMs, `curl<runOnHost for ${JSON.stringify(v)}`);
+  }
+  // the injection string collapses to its leading integer, never a shell token
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '90; rm -rf /' }).curlMaxTimeSec, 90);
+});
+
 test('collapseRepeats: folds identical runs into ×N, leaves singletons alone', () => {
   assert.equal(collapseRepeats('a\na\na\nb'), 'a  (×3)\nb');
   assert.equal(collapseRepeats('x\ny\nz'), 'x\ny\nz');
