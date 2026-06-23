@@ -40,20 +40,50 @@ export function assertValidContainerName(name) {
  * This is not just a size hack: a line repeated 25× carries no MORE diagnostic
  * detail than the line plus its count, but it does waste inference tokens and
  * latency. Collapsing surfaces the repetition AS a signal while shrinking the
- * payload — e.g. "OpenAI Realtime mode ready  (×25)".
+ * payload.
+ *
+ * CADENCE-AWARE (deploy #49 follow-up): logs are fetched with `docker logs -t`,
+ * so each line is prefixed with an RFC3339 timestamp. We fold consecutive lines
+ * that share the same MESSAGE (ignoring the timestamp) and report the time SPAN
+ * of the run — e.g. "OpenAI Realtime mode ready  (×40, 2026-06-23T02:10:17Z→
+ * 2026-06-23T03:50:17Z)". That span is the difference between a benign 10-minute
+ * heartbeat and a tight reconnect storm — a distinction the brain CANNOT make
+ * from a bare "(×40)". (A real run mis-diagnosed exactly this: 40 identical
+ * timestamp-less "ready" lines read as a storm when they were a 10-min beat.)
+ * Lines without a leading timestamp collapse to the plain "(×N)" form.
  */
+
+/** Split a log line into its leading RFC3339 timestamp (fractional seconds
+ * trimmed for compactness) and the remaining message. Returns ts:null for a
+ * line that doesn't start with a docker `-t` timestamp. */
+export function splitLogTimestamp(line) {
+  const m = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})\s([\s\S]*)$/);
+  if (!m) return { ts: null, msg: line };
+  return { ts: `${m[1]}${m[2]}`, msg: m[3] };
+}
+
 export function collapseRepeats(text) {
   const out = [];
-  let prev = null;
+  let prevMsg = null;
+  let firstTs = null;
+  let lastTs = null;
   let run = 0;
   const flush = () => {
-    if (prev === null) return;
-    out.push(run > 1 ? `${prev}  (×${run})` : prev);
+    if (prevMsg === null) return;
+    if (run > 1) {
+      const span = firstTs ? `, ${firstTs}→${lastTs}` : '';
+      out.push(`${prevMsg}  (×${run}${span})`);
+    } else {
+      out.push(firstTs ? `${firstTs} ${prevMsg}` : prevMsg);
+    }
   };
   for (const line of text.split('\n')) {
-    if (line === prev) { run += 1; continue; }
+    const { ts, msg } = splitLogTimestamp(line);
+    if (msg === prevMsg) { run += 1; lastTs = ts; continue; }
     flush();
-    prev = line;
+    prevMsg = msg;
+    firstTs = ts;
+    lastTs = ts;
     run = 1;
   }
   flush();
@@ -89,7 +119,7 @@ async function gatherContainer(name, logLines) {
     `__i=$(docker inspect '${name}' --format '{{.State.Status}}|{{.RestartCount}}|{{.State.Running}}' 2>&1); __rc=$?; ` +
     `printf 'INSPECT_RC=%s\\n' "$__rc"; printf '%s\\n' "$__i"; ` +
     `echo '${SENTINEL}'; ` +
-    `docker logs '${name}' --tail ${logLines} 2>&1`;
+    `docker logs -t '${name}' --tail ${logLines} 2>&1`;
 
   const { stdout, stderr, code } = await runOnHost(cmd);
   // ssh returns 255 when the connection itself fails — a SENSING failure.
