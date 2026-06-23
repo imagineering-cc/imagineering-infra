@@ -97,35 +97,49 @@ export function parseConnectAuthority(url) {
 }
 
 /**
- * True if `ip` is a non-public address the proxy must never connect to, even for
- * an allowlisted hostname (cage-match PR #111, Maxwell F2 SSRF). Covers loopback,
- * link-local (incl. cloud metadata 169.254/16 and IPv6 fe80::/10), RFC1918
- * private, IPv6 ULA (fc00::/7), unspecified, and IPv4-mapped IPv6. Without this,
- * an allowlisted host that resolves to an internal IP would let the agent reach
- * internal targets THROUGH the proxy (the one process holding real egress).
+ * True if `ip` is NOT a globally-routable public address the proxy may connect to
+ * (cage-match PR #111, Maxwell F2 SSRF + Carnot re-review). This is an ALLOWLIST,
+ * not a denylist-of-bad-ranges — a hand-rolled denylist is a sieve (the first cut
+ * missed fe80::/10 beyond fe80:, plus v6 multicast and v4 reserved/multicast).
+ *
+ *  - IPv6: forbidden UNLESS it's in global unicast 2000::/3 (first nibble 2 or 3).
+ *    That single rule rejects loopback (::1), unspecified (::), link-local
+ *    (fe80::/10 — ALL of fe80–febf), ULA (fc00::/7), site-local (fec0::/10),
+ *    multicast (ff00::/8), and everything else non-global in one shot.
+ *  - IPv4: forbidden if in any special-use block (loopback, RFC1918, link-local
+ *    incl. cloud metadata, CGNAT, this-network, multicast 224/4, reserved 240/4,
+ *    benchmarking 198.18/15, the TEST-NET/doc/protocol 192.0.0/24 family).
+ *  - IPv4-mapped IPv6 (::ffff:a.b.c.d) is normalized to its IPv4 tail first.
+ *
+ * Without this, an allowlisted host that resolves to an internal IP would let the
+ * agent reach internal targets THROUGH the proxy (the one process with egress).
  * @param {string} ip  a resolved numeric address
  */
 export function isForbiddenAddress(ip) {
   const a = String(ip).toLowerCase();
-  // Normalize an IPv4-mapped IPv6 (::ffff:10.0.0.1) to its IPv4 tail.
   const mapped = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   const v4 = mapped ? mapped[1] : (/^\d+\.\d+\.\d+\.\d+$/.test(a) ? a : null);
   if (v4) {
     const [o0, o1] = v4.split('.').map(Number);
-    if (o0 === 127) return true; // loopback
+    if (o0 === 0) return true; // 0.0.0.0/8 "this network" / unspecified
     if (o0 === 10) return true; // RFC1918
-    if (o0 === 172 && o1 >= 16 && o1 <= 31) return true; // RFC1918
-    if (o0 === 192 && o1 === 168) return true; // RFC1918
-    if (o0 === 169 && o1 === 254) return true; // link-local incl. cloud metadata
+    if (o0 === 127) return true; // loopback
     if (o0 === 100 && o1 >= 64 && o1 <= 127) return true; // CGNAT 100.64/10
-    if (o0 === 0) return true; // unspecified / "this network"
+    if (o0 === 169 && o1 === 254) return true; // link-local incl. cloud metadata
+    if (o0 === 172 && o1 >= 16 && o1 <= 31) return true; // RFC1918
+    if (o0 === 192 && o1 === 0) return true; // 192.0.0/24 protocol assignments + 192.0.2/24 TEST-NET-1
+    if (o0 === 192 && o1 === 168) return true; // RFC1918
+    if (o0 === 198 && (o1 === 18 || o1 === 19)) return true; // 198.18/15 benchmarking
+    if (o0 === 198 && o1 === 51) return true; // 198.51.100/24 TEST-NET-2
+    if (o0 === 203 && o1 === 0) return true; // 203.0.113/24 TEST-NET-3
+    if (o0 >= 224) return true; // 224/4 multicast + 240/4 reserved + 255.255.255.255
     return false;
   }
-  // IPv6
-  if (a === '::' || a === '::1') return true; // unspecified / loopback
-  if (a.startsWith('fe80:')) return true; // link-local
-  if (a.startsWith('fc') || a.startsWith('fd')) return true; // ULA fc00::/7
-  return false;
+  // IPv6: allow ONLY global unicast 2000::/3. The first hextet of a global-unicast
+  // address is 2000–3fff, i.e. its first hex nibble is 2 or 3. Everything else is
+  // non-global (link-local/ULA/multicast/loopback/unspecified) → forbidden.
+  const first = a.replace(/^\[/, '')[0];
+  return !(first === '2' || first === '3');
 }
 
 function log(...a) { process.stderr.write(`[egress-proxy] ${a.join(' ')}\n`); }
@@ -159,14 +173,18 @@ server.on('connect', async (req, clientSocket, head) => {
     return;
   }
 
-  // SSRF guard: resolve the allowlisted name and refuse if it maps to a non-public
-  // address. Connect to the VETTED IP (not the name) so there's no resolve→check→
-  // connect TOCTOU where a re-resolution could differ.
+  // SSRF guard: resolve the allowlisted name and refuse if ANY resolved address is
+  // non-public — a hostname that answers with both a public and a private record is
+  // a DNS-rebinding tell, so we taint the whole hostname rather than cherry-pick the
+  // public record (cage-match PR #111, Carnot re-review). Connect to the VETTED IP
+  // (not the name) so there's no resolve→check→connect TOCTOU.
   let addr;
   try {
     const got = await dns.lookup(host, { all: true });
-    addr = got.find((g) => !isForbiddenAddress(g.address));
-    if (!addr) { deny(clientSocket, 'host resolves only to non-public address', host); return; }
+    if (got.length === 0) { deny(clientSocket, 'host did not resolve', host); return; }
+    const forbidden = got.find((g) => isForbiddenAddress(g.address));
+    if (forbidden) { deny(clientSocket, 'host resolves to a non-public address', `${host} → ${forbidden.address}`); return; }
+    addr = got[0];
   } catch (e) {
     deny(clientSocket, 'dns resolution failed', `${host}: ${e.code || e.message}`);
     return;

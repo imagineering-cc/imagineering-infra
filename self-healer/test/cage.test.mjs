@@ -157,9 +157,25 @@ test('isForbiddenAddress: rejects loopback/link-local/private/metadata (cage-mat
   }
 });
 
+test('isForbiddenAddress: rejects the WHOLE fe80::/10 link-local range, not just fe80: (cage-match #111 re-review)', () => {
+  // The first cut only caught fe80:; link-local is fe80–febf. The allowlist
+  // rewrite (global unicast 2000::/3 only) fixes the whole family at once.
+  for (const ip of ['fe80::1', 'fe90::1', 'fea0::1', 'febf::dead', 'fec0::1', 'ff02::1', 'ff00::1']) {
+    assert.ok(isForbiddenAddress(ip), `must forbid non-global IPv6 ${ip}`);
+  }
+});
+
+test('isForbiddenAddress: rejects IPv4 multicast/reserved/benchmark/TEST-NET (cage-match #111 re-review)', () => {
+  for (const ip of ['224.0.0.1', '239.255.255.250', '240.0.0.1', '255.255.255.255',
+    '198.18.0.1', '198.19.255.1', '192.0.2.1', '198.51.100.7', '203.0.113.9', '192.0.0.8']) {
+    assert.ok(isForbiddenAddress(ip), `must forbid special-use IPv4 ${ip}`);
+  }
+});
+
 test('isForbiddenAddress: allows public addresses', () => {
   for (const ip of ['1.1.1.1', '140.82.112.3', '8.8.8.8', '172.15.0.1', '172.32.0.1',
-    '2606:4700:4700::1111']) {
+    '198.17.0.1', '198.20.0.1', '223.255.255.255',
+    '2606:4700:4700::1111', '2001:4860:4860::8888', '3fff::1']) {
     assert.ok(!isForbiddenAddress(ip), `must allow ${ip}`);
   }
 });

@@ -30,22 +30,29 @@ const [cmd, ...args] = process.argv.slice(sep + 1);
 // a normal bridge network would keep every proxy-env flag yet retain direct
 // egress (cage-match PR #111, Carnot). So verify Internal==true at spawn time and
 // refuse otherwise — the one boundary property the pure builder can't assert.
-function assertInternalNetwork(network) {
-  const r = spawnSync('docker', ['network', 'inspect', network, '--format', '{{.Internal}}'], { encoding: 'utf8' });
+function resolveInternalNetwork(network) {
+  // Read Internal AND the immutable network Id in one inspect. Returning the Id and
+  // spawning against THAT (not the name) closes the inspect-then-run race: a name
+  // could be deleted+recreated as a bridge between check and run, but the Id of a
+  // recreated network differs, so `docker run --network <stale-id>` fails rather
+  // than silently attaching to a non-internal replacement (cage-match #111, Carnot).
+  const r = spawnSync('docker', ['network', 'inspect', network, '--format', '{{.Internal}} {{.Id}}'], { encoding: 'utf8' });
   if (r.status !== 0) {
     process.stderr.write(`cage: cannot inspect network "${network}" (refusing to spawn): ${(r.stderr || '').trim()}\n`);
     process.exit(3);
   }
-  if (r.stdout.trim() !== 'true') {
-    process.stderr.write(`cage: network "${network}" is NOT --internal (Internal=${r.stdout.trim()}); egress backstop absent — refusing to spawn.\n`);
+  const [internal, id] = r.stdout.trim().split(/\s+/);
+  if (internal !== 'true') {
+    process.stderr.write(`cage: network "${network}" is NOT --internal (Internal=${internal}); egress backstop absent — refusing to spawn.\n`);
     process.exit(3);
   }
+  return id;
 }
-assertInternalNetwork(process.env.CAGE_NETWORK);
+const networkId = resolveInternalNetwork(process.env.CAGE_NETWORK);
 
 const { bin, argv } = buildCageArgv({
   image: process.env.CAGE_IMAGE,
-  network: process.env.CAGE_NETWORK,
+  network: networkId, // the inspected Id, not the name — closes the inspect→run race
   workdirHost: process.env.CAGE_WORKDIR,
   proxyUrl: process.env.CAGE_PROXY_URL,
   name: process.env.CAGE_NAME,

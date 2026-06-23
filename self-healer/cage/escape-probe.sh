@@ -186,12 +186,14 @@ echo
 echo "=== CAGE SELF-DEFENSE (run-cage refuses an un-internal network) ==="
 # The deny-all egress backstop IS the network being --internal. run-cage.mjs must
 # refuse to spawn on a non-internal network rather than silently leaking egress
-# (cage-match #111, Carnot). Prove it: point the cage at the egress (bridge) net
-# and assert it REFUSES (exit 3), never runs.
-if CAGE_NETWORK="$NET_EGR" node run-cage.mjs -- sh -c 'echo should-not-run' >/dev/null 2>&1; then
-  bad "self-defense: ran on a NON-internal network (egress backstop bypassed)"
+# (cage-match #111, Carnot). Prove the DOCUMENTED failure mode precisely: exit 3
+# AND the inner command never ran (no stdout marker).
+sd_out="$(CAGE_NETWORK="$NET_EGR" node run-cage.mjs -- sh -c 'echo DID-RUN-SHOULD-NOT' 2>/dev/null)"
+sd_rc=$?
+if [ "$sd_rc" -eq 3 ] && ! printf '%s' "$sd_out" | grep -q 'DID-RUN-SHOULD-NOT'; then
+  ok "self-defense: refused non-internal network (exit 3, command never ran)"
 else
-  ok "self-defense: refused to spawn on a non-internal network"
+  bad "self-defense: rc=$sd_rc out='$sd_out' (expected exit 3 and no command output)"
 fi
 
 echo
