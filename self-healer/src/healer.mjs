@@ -18,6 +18,7 @@ import { isOnBox } from './host.mjs';
 import { tierExitCode } from './tiers.mjs';
 import { pingIfNoteworthy } from './notify.mjs';
 import { draftIfActionable } from './draft.mjs';
+import { autoFixIfActionable } from './auto.mjs';
 
 /**
  * Load + validate the watch list. Fails CLOSED on a malformed config so a bad
@@ -121,6 +122,20 @@ async function main() {
     }
   } catch (err) {
     process.stderr.write(`[healer] green-draft FAILED (verdict still stands): ${err.message}\n`);
+  }
+
+  // green-auto: the FIRST stage that runs a codegen agent, fully caged. SHIPPED
+  // OFF (HEALER_GREEN_AUTO=1) and additionally gated on on-box + a repo-scoped
+  // token + a provisioned cage + an agent command — it spawns NOTHING until an
+  // operator wires all five. Like the ping/draft, a failure here must not change
+  // the diagnostic exit code (the verdict stands either way).
+  try {
+    const outcomes = await autoFixIfActionable(verdict);
+    for (const o of outcomes) {
+      process.stderr.write(`[healer] green-auto ${o.action}: ${o.container}${o.workdir ? ` [${o.workdir}]` : ''}${o.detail ? ` (${o.detail})` : ''}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`[healer] green-auto FAILED (verdict still stands): ${err.message}\n`);
   }
 
   // Exit code communicates tier to a cron/monitor without parsing JSON.

@@ -50,12 +50,35 @@ function resolveInternalNetwork(network) {
 }
 const networkId = resolveInternalNetwork(process.env.CAGE_NETWORK);
 
+// Forward a BOUNDED allowlist into the cage (the green-auto credential path). Set
+// by the orchestrator (src/auto.mjs), absent in the escape probe — so this block
+// is a no-op for the probe and its flags stay byte-identical:
+//   - CAGE_GH_TOKEN  → GH_TOKEN + GITHUB_TOKEN: the REPO-SCOPED token the agent
+//     authenticates `git`/`gh` with. cage.mjs bounds its reachability; the token
+//     scope bounds its authority (cage/README.md "Credential scope").
+//   - CAGE_AGENT_*   → forwarded verbatim: the agent's task context (repo,
+//     finding signature/diagnosis/action, fingerprint), already scrubbed+capped.
+//   - HOME=/work     → the writable-HOME the real agent needs (the residual
+//     cage/README.md assigns to the orchestrator); only when a token is present.
+// NOTHING else crosses, and buildCageArgv appends the proxy routing LAST so none
+// of these can clobber egress (a clobbered HTTPS_PROXY would mean direct egress).
+function forwardedCageEnv() {
+  const env = {};
+  const tok = process.env.CAGE_GH_TOKEN;
+  if (tok) { env.GH_TOKEN = tok; env.GITHUB_TOKEN = tok; env.HOME = '/work'; }
+  for (const k of Object.keys(process.env)) {
+    if (k.startsWith('CAGE_AGENT_')) env[k] = process.env[k];
+  }
+  return env;
+}
+
 const { bin, argv } = buildCageArgv({
   image: process.env.CAGE_IMAGE,
   network: networkId, // the inspected Id, not the name — closes the inspect→run race
   workdirHost: process.env.CAGE_WORKDIR,
   proxyUrl: process.env.CAGE_PROXY_URL,
   name: process.env.CAGE_NAME,
+  env: forwardedCageEnv(),
   cmd,
   args,
 });

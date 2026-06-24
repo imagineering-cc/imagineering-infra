@@ -98,11 +98,51 @@ real prod signals before any hands are wired. In order:
 2. **amber ping:** notify on amber+ via the `notify` proxy. ✅ (still read-only)
 3. **green draft:** file a remediation *issue* for a confident-green finding. ✅
    (the first ACTION stage — bounded blast radius: issue, never code/merge/deploy)
-4. **green auto:** behind an explicit flag, run the full green-tier loop
-   (fix → cage-match → merge → deploy → re-sense to confirm the symptom is gone).
+4. **green auto:** behind an explicit flag, run the green-tier remediation agent
+   inside the cage. **Scaffolded + SHIPPED OFF** (`src/auto.mjs`) — see below.
 
 Each step is gated on the previous one being *observed correct in prod*, not
 just coded. The cage is built before the monster.
+
+### green-auto (the caged action stage — built, OFF, not yet enabled)
+
+`src/auto.mjs` is the orchestrator for the first stage that runs the **monster** —
+a codegen agent that writes a fix from a log diagnosis. It does not relax any
+earlier guarantee; it **routes** each eligible finding through the already-proven
+cage (`cage/run-cage.mjs`, gated by `cage/escape-probe.sh`), never around it, and
+enforces the one boundary the OS cage can't: that the agent's GitHub authority is
+**bounded to the single target repo**.
+
+It mirrors `green-draft` exactly — same `actionableFindings` filter, same
+fingerprint, same single-box owner-fenced lock — with the cage swapped in for the
+GitHub-issue POST. Its outcome reports the **cage run**, never a merged fix; the
+PR / cage-match / merge / deploy happen (eventually) inside/after the caged agent,
+bounded by the repo-scoped token and the cage-match on the resulting PR.
+
+**Five independent fail-closed gates, ALL required before a single spawn:**
+
+| # | Gate | Env / condition | Why |
+| - | ---- | --------------- | --- |
+| 1 | feature flag | `HEALER_GREEN_AUTO=1` | OFF by default |
+| 2 | on-box | `HEALER_HOST` unset | the cage is a host-local Docker primitive — refuse remote runs rather than pretend |
+| 3 | **bounded authority** | `HEALER_GREEN_AUTO_TOKEN` set **and distinct** from the broad host token | the agent gets a repo-scoped token, never the healer's org-wide one |
+| 4 | cage substrate | `HEALER_CAGE_IMAGE` / `HEALER_CAGE_NETWORK` / `HEALER_CAGE_PROXY_URL` | the proven cage must exist to spawn into |
+| 5 | agent command | `HEALER_CAGE_AGENT_CMD` | the codegen "monster" is operator-installed, never hardcoded |
+
+> ⚠️ **DO NOT enable green-auto until a repo-scoped token bounds authority.**
+> Gate 3 is the *enforced* form of `cage/README.md`'s "Credential scope" contract:
+> the orchestrator structurally refuses to hand the agent the broad host token.
+> **Named residual:** distinct-from-broad guarantees a *dedicated* token; it does
+> not by itself prove the token is fine-grained-scoped to exactly one repo — that
+> narrowing is the operator's provisioning responsibility (a fine-grained PAT / App
+> installation token for the one repo). An online control-repo reachability probe
+> to verify the bound is tracked as follow-up.
+
+The token rides into the cage as `CAGE_GH_TOKEN` (→ `GH_TOKEN`/`GITHUB_TOKEN`
+inside the container) via `run-cage.mjs`'s bounded forward allowlist; the finding
+context rides as scrubbed+capped `CAGE_AGENT_*` vars; `HOME=/work` is set for the
+agent. Nothing else crosses, and the proxy routing is appended LAST so none of it
+can clobber egress.
 
 ### green-draft (the first action stage)
 

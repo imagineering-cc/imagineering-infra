@@ -182,6 +182,24 @@ else
   bad "workdir-rw: /work not writable (cage broken shut)"
 fi
 
+# token-forward: the green-auto credential path. run-cage.mjs must forward
+# CAGE_GH_TOKEN into the cage as GITHUB_TOKEN (the agent authenticates git/gh with
+# it) — and ONLY into the cage. The exfil direction is already covered by the
+# egress-forbidden/direct-ip cases above: a token present in the cage env still
+# can't leave except CONNECT-through-the-proxy to an allowlisted host.
+if CAGE_GH_TOKEN='probe-sentinel-token' cage sh -c 'test "$GITHUB_TOKEN" = probe-sentinel-token && test "$GH_TOKEN" = probe-sentinel-token' >/dev/null 2>&1; then
+  ok "token-forward: CAGE_GH_TOKEN reaches the cage as GITHUB_TOKEN/GH_TOKEN"
+else
+  bad "token-forward: CAGE_GH_TOKEN NOT forwarded into the cage (green-auto agent can't auth)"
+fi
+# token-not-leaked: WITHOUT CAGE_GH_TOKEN, no GitHub token must appear in the cage
+# env (the probe's normal cases must never carry a stray credential).
+if cage sh -c 'test -z "$GITHUB_TOKEN" && test -z "$GH_TOKEN"' >/dev/null 2>&1; then
+  ok "token-not-leaked: no GitHub token in the cage when CAGE_GH_TOKEN is unset"
+else
+  bad "token-not-leaked: a GitHub token leaked into the cage with CAGE_GH_TOKEN unset"
+fi
+
 echo
 echo "=== CAGE SELF-DEFENSE (run-cage refuses an un-internal network) ==="
 # The deny-all egress backstop IS the network being --internal. run-cage.mjs must

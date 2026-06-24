@@ -86,6 +86,8 @@ The `priv-esc` case deliberately uses a **root** probe image (`Dockerfile.probe`
 | `allow-inference` | reach the inference brain **through the proxy** | 2xx/expected |
 | `allow-github` | reach `api.github.com` **through the proxy** | 2xx |
 | `workdir-rw` | write+read a file in the clone workdir | ok |
+| `token-forward` | with `CAGE_GH_TOKEN` set, `$GITHUB_TOKEN`/`$GH_TOKEN` inside the cage match it | forwarded (the agent can auth) |
+| `token-not-leaked` | with `CAGE_GH_TOKEN` **unset**, no GitHub token in the cage env | absent (no stray credential) |
 
 A cage that fails an escape-FAIL case is **broken open** (the dangerous direction).
 A cage that fails a MUST-SUCCEED case is **broken shut** (green-auto can't work, but
@@ -113,8 +115,19 @@ it's safe) — fix forward, never relax an escape gate to make a success case pa
 The GitHub token handed to the agent MUST be scoped to the **one** target repo
 (fine-grained PAT / installation token), so a fully-subverted agent that *does* open
 a malicious PR still cannot reach another repo. The OS cage bounds *reachability*;
-the token scope bounds *authority*. Both are required. Tracked separately from this
-probe.
+the token scope bounds *authority*. Both are required.
+
+**Now partly enforced (`src/auto.mjs` gate 3, `boundedAuthority`).** The green-auto
+orchestrator refuses to spawn unless `HEALER_GREEN_AUTO_TOKEN` is set AND **distinct
+from the healer's broad host token** (`HEALER_GH_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`) —
+so the agent can never receive the org-wide token. The token reaches the cage only
+as `CAGE_GH_TOKEN`, forwarded by `run-cage.mjs` into `GH_TOKEN`/`GITHUB_TOKEN` inside
+the container (alongside `HOME=/work` and the scrubbed `CAGE_AGENT_*` task context;
+nothing else). **Residual (named, not enforced):** distinct-from-broad guarantees a
+*dedicated* token, not that it is *fine-grained-scoped to exactly one repo* — that
+narrowing is the operator's provisioning duty. A control-repo reachability probe
+(reach a forbidden repo with the token, expect 404/403) to verify the bound online
+is the next gate to add.
 
 ## ADR — why Docker, not bwrap/systemd (deviates from the original plan)
 
