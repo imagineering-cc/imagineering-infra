@@ -209,3 +209,12 @@ world.imagineering.cc {
         try_files {path} /index.html
     }
 }
+
+# --- live-game (quiz buzzer) ---
+# Phones are buzzers, the big screen is the board, Claude is the Game Master.
+# Server runs on the box as a systemd/long-running process bound to localhost:7373.
+# Previously this route lived only in Caddy's running config (added via the admin
+# API), so a container restart dropped it — now it's durable in the Caddyfile.
+quiz-game.imagineering.cc {
+    reverse_proxy localhost:7373
+}
