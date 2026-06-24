@@ -122,8 +122,9 @@ orchestrator refuses to spawn unless `HEALER_GREEN_AUTO_TOKEN` is set AND **dist
 from the healer's broad host token** (`HEALER_GH_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`) —
 so the agent can never receive the org-wide token. The token reaches the cage only
 as `CAGE_GH_TOKEN`, forwarded by `run-cage.mjs` into `GH_TOKEN`/`GITHUB_TOKEN` inside
-the container (alongside `HOME=/work` and the scrubbed `CAGE_AGENT_*` task context;
-nothing else). **Residual (named, not enforced):** distinct-from-broad guarantees a
+the container — **key-only (`-e GH_TOKEN`, no value), so the secret rides in the
+docker client env, never the `docker run` argv / host `ps`** (cage-match #114) —
+alongside `HOME=/work` and the scrubbed `CAGE_AGENT_*` task context; nothing else. **Residual (named, not enforced):** distinct-from-broad guarantees a
 *dedicated* token, not that it is *fine-grained-scoped to exactly one repo* — that
 narrowing is the operator's provisioning duty. A control-repo reachability probe
 (reach a forbidden repo with the token, expect 404/403) to verify the bound online

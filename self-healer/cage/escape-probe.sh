@@ -184,9 +184,11 @@ fi
 
 # token-forward: the green-auto credential path. run-cage.mjs must forward
 # CAGE_GH_TOKEN into the cage as GITHUB_TOKEN (the agent authenticates git/gh with
-# it) — and ONLY into the cage. The exfil direction is already covered by the
-# egress-forbidden/direct-ip cases above: a token present in the cage env still
-# can't leave except CONNECT-through-the-proxy to an allowlisted host.
+# it) — and ONLY into the cage. The token is passed KEY-ONLY (`-e GH_TOKEN`), so
+# its VALUE rides in the docker client env, never the `docker run` argv / host
+# `ps` (cage-match #114, Maxwell F1). The exfil direction is already covered by
+# the egress-forbidden/direct-ip cases above: a token present in the cage env
+# still can't leave except CONNECT-through-the-proxy to an allowlisted host.
 if CAGE_GH_TOKEN='probe-sentinel-token' cage sh -c 'test "$GITHUB_TOKEN" = probe-sentinel-token && test "$GH_TOKEN" = probe-sentinel-token' >/dev/null 2>&1; then
   ok "token-forward: CAGE_GH_TOKEN reaches the cage as GITHUB_TOKEN/GH_TOKEN"
 else

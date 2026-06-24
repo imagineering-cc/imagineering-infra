@@ -139,10 +139,11 @@ bounded by the repo-scoped token and the cage-match on the resulting PR.
 > to verify the bound is tracked as follow-up.
 
 The token rides into the cage as `CAGE_GH_TOKEN` (→ `GH_TOKEN`/`GITHUB_TOKEN`
-inside the container) via `run-cage.mjs`'s bounded forward allowlist; the finding
-context rides as scrubbed+capped `CAGE_AGENT_*` vars; `HOME=/work` is set for the
-agent. Nothing else crosses, and the proxy routing is appended LAST so none of it
-can clobber egress.
+inside the container) via `run-cage.mjs`'s bounded forward allowlist — **key-only
+(`-e GH_TOKEN`, no value), so the secret never enters the `docker run` argv / host
+`ps`**; the finding context rides as scrubbed+capped `CAGE_AGENT_*` vars;
+`HOME=/work` is set for the agent. Nothing else crosses, and the proxy routing is
+appended LAST so none of it can clobber egress.
 
 ### green-draft (the first action stage)
 
