@@ -69,6 +69,19 @@ test('boundedAuthority: REFUSES when the bound token equals the broad host token
   }
 });
 
+test('boundedAuthority: refuses when bound matches a NON-FIRST broad token (cage-match #114 regression)', () => {
+  // The Carnot bug: a first-only `A || B || C` check compared the bound token
+  // against HEALER_GH_TOKEN only. With two broad tokens set and the bound token
+  // equal to the SECOND one, the broad token would have slipped into the cage.
+  const r = boundedAuthority({
+    HEALER_GH_TOKEN: 'broad-a',
+    GITHUB_TOKEN: 'broad-b',
+    HEALER_GREEN_AUTO_TOKEN: 'broad-b', // matches the second broad token, not the first
+  });
+  assert.equal(r.ok, false, 'must refuse a bound token equal to ANY present broad token');
+  assert.match(r.reason, /EVERY broad host token/);
+});
+
 // ── Gate 4+5: cage substrate ─────────────────────────────────────────────────
 
 test('cageSubstrate: names every missing var and fails closed', () => {

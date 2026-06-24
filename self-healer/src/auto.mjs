@@ -39,6 +39,7 @@
 // The orchestrator's outcome reports the CAGE RUN, never a merged fix.
 
 import { spawn } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { actionableFindings, findingFingerprint, acquireDraftLock, releaseDraftLock } from './draft.mjs';
@@ -52,10 +53,25 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * proved (run-cage.mjs's "no drift" guarantee). */
 export const RUN_CAGE_PATH = join(HERE, '..', 'cage', 'run-cage.mjs');
 
-/** The healer's BROAD host token (same precedence draft.mjs uses for the GH
- * API). green-auto must never hand THIS to the caged agent. */
-function broadHostToken(env) {
-  return env.HEALER_GH_TOKEN || env.GITHUB_TOKEN || env.GH_TOKEN || null;
+/** The closed set of per-finding outcome actions. Frozen so the values are a
+ * compile-checkable closed set (the same discipline tiers.mjs uses), not ad-hoc
+ * string literals scattered through the loop (cage-match #114, Carnot). */
+export const AUTO_ACTIONS = Object.freeze({
+  REFUSED: 'refused', // a global gate (on-box / authority / substrate) was unmet — spawned nothing
+  SKIPPED: 'skipped', // this finding has no known source repo
+  DEDUPED: 'deduped', // a concurrent run owns the finding's lock
+  CAGED: 'caged', // the cage ran and exited clean
+  FAILED: 'failed', // clone/spawn error, lock error, or non-zero cage exit
+});
+
+/** EVERY broad host token currently in the env (the healer's own GH-API creds,
+ * any of the three names draft.mjs accepts). The bound green-auto token must
+ * equal NONE of them — checking only the first (a `A || B || C` short-circuit)
+ * was a real hole: with HEALER_GH_TOKEN=a AND GITHUB_TOKEN=b both set, a bound
+ * token of `b` would slip past a first-only check and get forwarded into the
+ * cage (cage-match #114, Carnot). A closed-set check must inspect the WHOLE set. */
+function broadHostTokens(env) {
+  return [env.HEALER_GH_TOKEN, env.GITHUB_TOKEN, env.GH_TOKEN].filter(Boolean);
 }
 
 /**
@@ -78,9 +94,8 @@ export function boundedAuthority(env = process.env) {
   if (!bound) {
     return { ok: false, reason: 'no repo-scoped token: set HEALER_GREEN_AUTO_TOKEN to a token scoped to ONLY the target repo' };
   }
-  const broad = broadHostToken(env);
-  if (broad && bound === broad) {
-    return { ok: false, reason: 'HEALER_GREEN_AUTO_TOKEN must be DISTINCT from the broad host token (a repo-scoped token, not the healer’s own org-wide one)' };
+  if (broadHostTokens(env).includes(bound)) {
+    return { ok: false, reason: 'HEALER_GREEN_AUTO_TOKEN must be DISTINCT from EVERY broad host token (HEALER_GH_TOKEN / GITHUB_TOKEN / GH_TOKEN) — a repo-scoped token, not the healer’s own org-wide one' };
   }
   return { ok: true, token: bound };
 }
@@ -145,7 +160,11 @@ export function buildRunCageSpawn({ finding, repo, workdirHost, token, substrate
     CAGE_AGENT_FP: fp,
   };
   // agentCmd is operator-controlled (trusted env); the agent reads its task from
-  // the CAGE_AGENT_* env, so the command itself carries no untrusted data.
+  // the CAGE_AGENT_* env, so the command itself carries no untrusted data. NOTE:
+  // this whitespace split is quote-HOSTILE — it can't express an arg containing a
+  // space (`-p "fix the bug"`). That's fine because the task rides in env, not
+  // argv; if a future agent needs spaced args, switch to a JSON-argv env var
+  // rather than teaching this a shell-quoting grammar (cage-match #114).
   const agentArgv = substrate.agentCmd.split(/\s+/).filter(Boolean);
   const argv = [runCagePath, '--', ...agentArgv];
   return { bin: process.execPath, argv, env, name: env.CAGE_NAME };
@@ -183,7 +202,10 @@ const CLONE_SCRIPT = [
 const CAGE_UID_GID = '1000:1000';
 
 /** Prepare a fresh, cage-writable clone of `repo`; returns its host path. Throws
- * on failure so the caller fails closed (no spawn against a missing workdir). */
+ * on failure so the caller fails closed (no spawn against a missing workdir). The
+ * clone script itself cleans up after a FAILED clone (rm dir + askpass); this
+ * throw path leaves nothing behind. A SUCCESSFUL clone's dir is the caller's to
+ * remove — see cleanupWorkdir. */
 async function prepareWorkdir(repo, token) {
   const { stdout, stderr, code } = await runOnHostScript(CLONE_SCRIPT, [repo, token, CAGE_UID_GID], { timeoutMs: 120_000 });
   const dir = stdout.trim();
@@ -191,6 +213,16 @@ async function prepareWorkdir(repo, token) {
     throw new Error(`workdir clone failed (code ${code}): ${stderr.trim().slice(0, 200)}`);
   }
   return dir;
+}
+
+/** Best-effort removal of a finished cage's host clone dir, so /tmp doesn't
+ * accumulate one clone per run (cage-match #114, Maxwell F2 + Carnot). on-box =
+ * same filesystem, so a direct rm suffices; if chown handed the dir to the cage
+ * uid (1000) in sticky /tmp the healer user (1002) may be unable to remove it —
+ * tolerated, since it's a leak not a vuln and the dir is a shallow throwaway. */
+function cleanupWorkdir(dir) {
+  if (!dir) return;
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort; see note */ }
 }
 
 /** Spawn `node run-cage.mjs -- <agentCmd>` for one finding; resolve its exit code.
@@ -224,22 +256,22 @@ export async function autoFixIfActionable(verdict, env = process.env) {
 
   // Gate 2: the cage is a box-local Docker primitive — refuse remote runs.
   if (!isOnBox()) {
-    return [{ container: '*', action: 'refused', detail: 'green-auto runs on-box only (the cage is a host-local Docker primitive); unset HEALER_HOST to run on the box' }];
+    return [{ container: '*', action: AUTO_ACTIONS.REFUSED, detail: 'green-auto runs on-box only (the cage is a host-local Docker primitive); unset HEALER_HOST to run on the box' }];
   }
 
   // Gate 3: bounded authority — a dedicated repo-scoped token, never the broad one.
   const auth = boundedAuthority(env);
-  if (!auth.ok) return [{ container: '*', action: 'refused', detail: auth.reason }];
+  if (!auth.ok) return [{ container: '*', action: AUTO_ACTIONS.REFUSED, detail: auth.reason }];
 
   // Gate 4+5: the proven cage substrate + the agent command.
   const sub = cageSubstrate(env);
-  if (!sub.ok) return [{ container: '*', action: 'refused', detail: sub.reason }];
+  if (!sub.ok) return [{ container: '*', action: AUTO_ACTIONS.REFUSED, detail: sub.reason }];
 
   const outcomes = [];
   for (const f of actionableFindings(verdict)) {
     const repo = repoForContainer(f.container);
     if (!repo) {
-      outcomes.push({ container: f.container, action: 'skipped', detail: 'no known source repo' });
+      outcomes.push({ container: f.container, action: AUTO_ACTIONS.SKIPPED, detail: 'no known source repo' });
       continue;
     }
     const fp = findingFingerprint(f);
@@ -251,29 +283,31 @@ export async function autoFixIfActionable(verdict, env = process.env) {
     try {
       lockTok = acquireDraftLock(fp);
     } catch (err) {
-      outcomes.push({ container: f.container, action: 'failed', detail: `lock error (fail-closed): ${err.message}` });
+      outcomes.push({ container: f.container, action: AUTO_ACTIONS.FAILED, detail: `lock error (fail-closed): ${err.message}` });
       continue;
     }
     if (!lockTok) {
-      outcomes.push({ container: f.container, action: 'deduped', detail: `concurrent run owns lock (fp ${fp.slice(0, 12)}…)` });
+      outcomes.push({ container: f.container, action: AUTO_ACTIONS.DEDUPED, detail: `concurrent run owns lock (fp ${fp.slice(0, 12)}…)` });
       continue;
     }
 
+    let workdirHost = null;
     try {
-      const workdirHost = await prepareWorkdir(repo, auth.token);
+      workdirHost = await prepareWorkdir(repo, auth.token);
       const spawnSpec = buildRunCageSpawn({ finding: f, repo, workdirHost, token: auth.token, substrate: sub });
       const exitCode = await spawnCage(spawnSpec);
       outcomes.push({
         container: f.container,
-        action: exitCode === 0 ? 'caged' : 'failed',
+        action: exitCode === 0 ? AUTO_ACTIONS.CAGED : AUTO_ACTIONS.FAILED,
         detail: exitCode === 0 ? `cage exited clean (fp ${fp.slice(0, 12)}…)` : `cage exited ${exitCode}`,
         workdir: workdirHost,
         exitCode,
       });
     } catch (err) {
       // A clone failure or spawn error lands here → we did NOT run the agent.
-      outcomes.push({ container: f.container, action: 'failed', detail: err.message });
+      outcomes.push({ container: f.container, action: AUTO_ACTIONS.FAILED, detail: err.message });
     } finally {
+      cleanupWorkdir(workdirHost); // the cage is --rm; the host clone is not
       releaseDraftLock(fp, lockTok);
     }
   }
