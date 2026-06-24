@@ -388,6 +388,14 @@ deploy_familiars_server() {
     fam_field() { echo "$FAM_PLAINTEXT" | yq -r "$1 // \"\""; }
     {
         echo "# familiars-server Configuration (auto-generated from secrets.yaml)"
+        # NOTE: these FIREBASE_* values are FAMILIARS-SERVER's, not downstream-server's.
+        # The two services share Firebase FIELD NAMES (FIREBASE_PROJECT_ID,
+        # FIREBASE_SERVICE_ACCOUNT_BASE64), so a FIREBASE_* hunk in this repo's diff
+        # reads ambiguously — but downstream-server has NO env generator here at all
+        # (it's hand-managed from the nickmeinhold/downstream repo since #291 Phase B;
+        # this repo keeps only its Caddy route + shared lib/telegram.sh). So any
+        # FIREBASE_* line in deploy-to.sh is familiars', full stop. (A 2026-06-12 retro
+        # misread exactly this as a "dropped downstream generator hunk" — it never existed.)
         printf 'FIREBASE_PROJECT_ID=%s\n'             "$(dotenv_quote "$(fam_field '.firebase_project_id')")"
         printf 'FIREBASE_SERVICE_ACCOUNT_BASE64=%s\n' "$(dotenv_quote "$(fam_field '.firebase_service_account_base64')")"
         printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n'         "$(dotenv_quote "$(fam_field '.claude_code_oauth_token')")"
