@@ -73,3 +73,20 @@ jobs:
         env:
           REQUIRE_ALL: "1"
         run: ./scripts/test-secret-quoting.sh
+
+  caddy-validate:
+    name: Caddyfile Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Validate caddy/Caddyfile with the SAME image the box runs (caddy:2-alpine),
+      # so a syntax error or bad directive is caught HERE — before a deploy reloads
+      # it into the live proxy and takes every domain (*.imagineering.cc, xdeca.com,
+      # callonclare.com.au) down. `caddy validate` only parses + adapts the config;
+      # it does NOT dial upstreams, so the localhost:PORT backends that don't exist
+      # in CI are fine. Fails the build (non-zero) on an invalid Caddyfile.
+      - name: Validate caddy/Caddyfile
+        run: |
+          docker run --rm -v "$PWD/caddy:/etc/caddy:ro" caddy:2-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
