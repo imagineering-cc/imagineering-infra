@@ -10,6 +10,10 @@ kan.imagineering.cc {
     reverse_proxy localhost:3013
 }
 
+chat.imagineering.cc {
+    reverse_proxy localhost:8095
+}
+
 dav.imagineering.cc {
     reverse_proxy localhost:5232
 }
