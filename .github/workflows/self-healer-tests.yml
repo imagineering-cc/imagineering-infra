@@ -1,0 +1,29 @@
+name: Self-healer Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['self-healer/**']
+  push:
+    branches: [main]
+    paths: ['self-healer/**']
+
+jobs:
+  self-healer-tests:
+    name: Self-healer Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The self-healer is a zero-dep Node project whose tests run via
+      # `node --test` (see self-healer/package.json). The other CI checks
+      # (Shell/YAML linting, secret quoting) never exercise it, so a PR that
+      # broke these tests previously merged green — this gate closes that hole.
+      - name: Run self-healer tests
+        working-directory: self-healer
+        run: node --test

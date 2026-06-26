@@ -1,0 +1,15 @@
+# probe image — a representative stand-in for the codegen agent, carrying just
+# enough tools to ATTEMPT each escape in cage/README.md. The confinement is
+# enforced by the `docker run` flags (cage.mjs), which are largely image-
+# independent, so this image proves the cage holds for the real agent image too.
+#
+# DELIBERATELY ROOT (no USER line) — cage-match PR #111, Carnot. If the probe
+# image set its own non-root USER, the "non-root" escape test would prove the
+# IMAGE, not the cage. By shipping a root image we remove the favorable initial
+# condition: the cage's `--user` flag is the ONLY thing that can make `id -u`
+# non-zero, so the test falsifies the cage, not the Dockerfile. The probe also
+# asserts the bare image is uid 0 (a control) to keep this guarantee honest.
+FROM alpine:3.20
+RUN apk add --no-cache curl coreutils
+WORKDIR /work
+CMD ["sh"]
