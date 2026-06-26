@@ -388,20 +388,23 @@ ssh nick-mel 'mkdir -p ~/lib \
   && rm -f /tmp/watcher-base.sh /tmp/telegram.sh /tmp/notify-canary-melbourne.sh'
 
 # 2. The INDEPENDENT alert path needs a Telegram bot token on Melbourne, at
-#    /etc/imagineering-secrets/telegram.env (root:nick 0640) — the same file
-#    scripts/lib/telegram.sh auto-sources. Build it locally from notify's
-#    secrets and install (never echo the token over an interactive ssh).
+#    /etc/imagineering-secrets/telegram.env (root:ubuntu 0640 — ubuntu is the
+#    cron user that sources it) — the same file scripts/lib/telegram.sh
+#    auto-sources. Build it from notify's secrets and STREAM it over ssh stdin
+#    under umask 077: scp would land the token world-readable (0644) in the
+#    remote /tmp; piping under umask 077 keeps the temp file 0600, and the
+#    remote `trap ... EXIT` removes it even if a later step fails.
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
 umask 077
 BOT=$(sops -d notify/secrets.yaml | yq -r '.telegram_bot_token')
 CHAT=$(sops -d notify/secrets.yaml | yq -r '.telegram_chat_id')
-[ -n "$BOT" ] && [ "$BOT" != "null" ] || { echo "ERROR: telegram_bot_token empty/null — aborting"; exit 1; }
-printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "$BOT" "$CHAT" > /tmp/telegram.env
-scp /tmp/telegram.env nick-mel:/tmp/
-ssh nick-mel 'sudo install -d -m 0755 /etc/imagineering-secrets \
-  && sudo install -m 0640 -o root -g "$(id -gn)" /tmp/telegram.env /etc/imagineering-secrets/telegram.env \
-  && rm -f /tmp/telegram.env'
-rm -f /tmp/telegram.env; unset BOT CHAT
+[ -n "$BOT" ]  && [ "$BOT" != "null" ]  || { echo "ERROR: telegram_bot_token empty/null — aborting"; exit 1; }
+[ -n "$CHAT" ] && [ "$CHAT" != "null" ] || { echo "ERROR: telegram_chat_id empty/null — aborting"; exit 1; }
+printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "$BOT" "$CHAT" \
+  | ssh nick-mel 'umask 077; trap "rm -f /tmp/telegram.env" EXIT; cat > /tmp/telegram.env \
+      && sudo install -d -m 0755 /etc/imagineering-secrets \
+      && sudo install -m 0640 -o root -g ubuntu /tmp/telegram.env /etc/imagineering-secrets/telegram.env'
+unset BOT CHAT
 
 # 3. Confirm Melbourne can SSH to Sydney as ubuntu (BatchMode, key-based):
 ssh nick-mel 'ssh -o BatchMode=yes -o ConnectTimeout=10 ubuntu@149.118.69.221 "echo reachable"'

@@ -143,13 +143,25 @@ health=$(docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}
 case "$health" in healthy|none) : ;; *) echo "FAIL:container-unhealthy($health)"; exit 0 ;; esac
 # L2: /health answers 200 on the loopback bind.
 code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${P}/health" 2>/dev/null) || code="000"
-[ "$code" = "200" ] || { echo "FAIL:health-http($code)"; exit 0; }
+# A 000 (connect failed) is a transient blip → UNKNOWN (debounced); a real
+# non-200 (server returned an error) is deterministic → FAIL.
+[ "$code" = "200" ] || { if [ "$code" = "000" ]; then echo "UNKNOWN:health-unreachable"; else echo "FAIL:health-http($code)"; fi; exit 0; }
 # L3: Telegram getMe FROM Sydney, using the container'\''s own bot token.
 # Read the token out of the running container env (never printed/logged here).
 tok=$(docker inspect -f "{{range .Config.Env}}{{println .}}{{end}}" "$C" 2>/dev/null | sed -n "s/^TELEGRAM_BOT_TOKEN=//p")
 [ -n "$tok" ] || { echo "UNKNOWN:no-token-in-container-env"; exit 0; }
-gm=$(curl -s --max-time 8 "https://api.telegram.org/bot${tok}/getMe" 2>/dev/null) || { echo "FAIL:telegram-egress"; exit 0; }
-case "$gm" in *'\''"ok":true'\''*) echo "OK" ;; *) echo "FAIL:telegram-getme-rejected" ;; esac
+gm=$(curl -s --max-time 8 "https://api.telegram.org/bot${tok}/getMe" 2>/dev/null) || { echo "UNKNOWN:telegram-egress"; exit 0; }
+# ok:true → delivery-capable. Otherwise split transient (429 rate-limit / 5xx
+# Telegram outage → debounced UNKNOWN) from deterministic (401 revoked token,
+# other 4xx → immediate FAIL, the exact thing this canary exists to catch).
+case "$gm" in
+    *'\''"ok":true'\''*) echo "OK" ;;
+    *) ec=${gm#*"error_code":}; ec=${ec%%[!0-9]*}
+       case "$ec" in
+           429|5??) echo "UNKNOWN:telegram-transient($ec)" ;;
+           *)       echo "FAIL:telegram-getme-rejected($ec)" ;;
+       esac ;;
+esac
 '
     local out
     if ! out=$(ssh \
