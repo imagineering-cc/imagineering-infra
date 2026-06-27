@@ -249,23 +249,24 @@ restore_aiko_gateway() {
         integ=$(sqlite3 /data/aiko.db.restore "PRAGMA integrity_check;")
         [ "$integ" = "ok" ] || { echo "integrity_check failed: $integ" >&2; exit 1; }
         sqlite3 /data/aiko.db.restore ".tables" | grep -qw users || { echo "no users table in restored DB" >&2; exit 1; }
-        # Failure-safe swap. Preserve the OLD db AND its WAL/SHM as the rescue
-        # (an uncheckpointed WAL holds committed-but-unmerged data; rescuing only
-        # aiko.db would lose it). Then move the validated candidate in; if THAT
-        # mv fails, roll the rescue back so we never end up with no aiko.db.
         rescue="'"$rescue"'"
+        # Rescue the OLD db for human recovery (set -e: a failed rescue of the
+        # main db ABORTS before we touch the live one — never clobber without a
+        # copy). Checkpoint first so the rescue is COMPLETE (an uncheckpointed
+        # WAL holds committed-but-unmerged data); best-effort since a corrupt DB
+        # (the reason for restoring) may not checkpoint.
         if [ -f /data/aiko.db ]; then
-          mv /data/aiko.db "/data/$rescue"
-          [ -f /data/aiko.db-wal ] && mv /data/aiko.db-wal "/data/$rescue-wal" || true
-          [ -f /data/aiko.db-shm ] && mv /data/aiko.db-shm "/data/$rescue-shm" || true
+          sqlite3 /data/aiko.db "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
+          cp -p /data/aiko.db "/data/$rescue"
+          [ -f /data/aiko.db-wal ] && cp -p /data/aiko.db-wal "/data/$rescue-wal" || true
+          [ -f /data/aiko.db-shm ] && cp -p /data/aiko.db-shm "/data/$rescue-shm" || true
         fi
-        if ! mv /data/aiko.db.restore /data/aiko.db; then
-          [ -f "/data/$rescue" ] && mv "/data/$rescue" /data/aiko.db
-          [ -f "/data/$rescue-wal" ] && mv "/data/$rescue-wal" /data/aiko.db-wal || true
-          [ -f "/data/$rescue-shm" ] && mv "/data/$rescue-shm" /data/aiko.db-shm || true
-          echo "swap failed; rolled back to original DB" >&2
-          exit 1
-        fi
+        # Atomic install: rename clobbers the old db in ONE step — the result is
+        # always old-or-new, never neither, so no rollback window exists.
+        mv -f /data/aiko.db.restore /data/aiko.db
+        # The candidate came fresh from .dump (no WAL); delete any stale WAL/SHM
+        # from the OLD db so SQLite cannot mis-apply it to the new one (corruption).
+        rm -f /data/aiko.db-wal /data/aiko.db-shm
       ' < "$sql_file"; then
     error "aiko-gateway restore FAILED validation — live DB left untouched. Restarting."
     docker compose up -d
