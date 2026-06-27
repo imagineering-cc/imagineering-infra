@@ -30,6 +30,9 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       - ADMIN_IDS=${ADMIN_IDS:-}
+      # River's own relayed/bridged puppet MXIDs — dropped as self so River
+      # doesn't respond to its own echo the superbridge fans back into the hub.
+      - SELF_PUPPET_IDS=${SELF_PUPPET_IDS:-}
       - MATRIX_ALWAYS_RESPOND_ROOMS=${MATRIX_ALWAYS_RESPOND_ROOMS:-}
       # Bridge appservice bots excluded from DM member counting (portal rooms
       # carry the bridge bot as an extra member). All four MXIDs verified
