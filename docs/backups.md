@@ -50,6 +50,12 @@ tail -f /var/log/backup.log
 /opt/scripts/restore.sh aiko-gateway
 ```
 
+> ⚠️ **`aiko-gateway` restore replaces the SOLE store** of all gateway accounts,
+> messages, and the ACL overlay. It prompts for typed confirmation, validates the
+> dump into a temp DB (`PRAGMA integrity_check` + a `users`-table check) before
+> swapping, and keeps the previous DB as a timestamped `aiko.db.rescue-*` inside
+> the volume. If validation fails, the live DB is left untouched.
+
 ### Restore Process
 
 1. Script clones backup repo from GitHub (shallow)

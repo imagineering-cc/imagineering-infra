@@ -199,20 +199,31 @@ backup_matrix() {
 backup_aiko_gateway() {
   log "Backing up aiko-chat-gateway..."
 
+  local tmp="$BACKUP_DIR/aiko-gateway-$DATE.sql"
+  local err="$BACKUP_DIR/aiko-gateway-$DATE.err"
   local out="$BACKUP_DIR/aiko-gateway-$DATE.sql.gz"
 
+  # Dump to a PLAIN .sql first (no pipe) so sqlite3's REAL exit is seen — piping
+  # to gzip would mask it behind gzip's status (and a gzip of empty input is
+  # still a non-empty container, so an `-s` size check on the .gz lies). Capture
+  # stderr for the error message (a WAL-locked read fails loudly, not silently).
   if ! docker run --rm -v "aiko-chat-gateway_aiko_gateway_data:/data:ro" sqlite-dumper:latest \
-    sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump 2>/dev/null \
-     | gzip > "$out"; then
-    error "aiko-gateway sqlite3 .dump failed"
-    rm -f "$out"
+       sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump > "$tmp" 2>"$err"; then
+    error "aiko-gateway sqlite3 .dump failed: $(tr '\n' ' ' < "$err")"
+    rm -f "$tmp" "$err"
     return 1
   fi
-  if [ ! -s "$out" ]; then
-    error "aiko-gateway dump produced empty output"
-    rm -f "$out"
+  # A COMPLETE .dump always terminates with `COMMIT;`. Its absence means empty,
+  # truncated, or errored output — reject it BEFORE it can overwrite a good
+  # backup (this DB is the sole copy of auth+messages+ACL; an empty backup is
+  # worse than none because restore would replay it over the live DB).
+  if ! grep -q '^COMMIT;' "$tmp"; then
+    error "aiko-gateway dump invalid (no COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
+    rm -f "$tmp" "$err"
     return 1
   fi
+  rm -f "$err"
+  gzip -f "$tmp"   # -> $out (aiko-gateway-$DATE.sql.gz)
   log "aiko-gateway backup complete: $(basename "$out") ($(du -h "$out" | cut -f1))"
 }
 

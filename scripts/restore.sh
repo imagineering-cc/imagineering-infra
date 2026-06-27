@@ -211,24 +211,52 @@ restore_aiko_gateway() {
   fetch_backups
 
   local sql_file="$BACKUP_CLONE_DIR/aiko-gateway.sql"
-  if [ ! -f "$sql_file" ]; then
-    error "No aiko-gateway.sql found in backup repo"
-    cleanup_backups
-    exit 1
+  # Validate the dump BEFORE touching anything: present, non-empty, and complete
+  # (a COMPLETE sqlite .dump ends with COMMIT;). The gateway DB is the SOLE copy
+  # of auth+messages+ACL, so a bad dump must never reach the destructive path.
+  if [ ! -s "$sql_file" ]; then
+    error "No (non-empty) aiko-gateway.sql in backup repo"; cleanup_backups; exit 1
+  fi
+  if ! grep -q '^COMMIT;' "$sql_file"; then
+    error "aiko-gateway.sql looks truncated/invalid (no COMMIT;)"; cleanup_backups; exit 1
+  fi
+
+  # Irreversible: replacing the sole auth+message store. Require typed consent.
+  echo "WARNING: this REPLACES the gateway's SOLE database (all accounts + messages + ACL)."
+  echo "  dump: $sql_file ($(wc -l < "$sql_file") lines, $(du -h "$sql_file" | cut -f1))"
+  read -r -p "Type 'restore aiko-gateway' to proceed: " confirm
+  if [ "$confirm" != "restore aiko-gateway" ]; then
+    error "Aborted (no confirmation)"; cleanup_backups; exit 1
   fi
 
   log "Stopping gateway..."
   cd ~/apps/aiko-chat-gateway
   docker compose stop
 
-  log "Restoring DB from aiko-gateway.sql..."
-  # Remove the old DB + WAL/SHM first so stale write-ahead state can't corrupt
-  # the restore, then replay the dump into a fresh aiko.db (rw mount).
-  docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c \
-    "rm -f /data/aiko.db /data/aiko.db-wal /data/aiko.db-shm && sqlite3 /data/aiko.db" < "$sql_file" || \
-    error "Restore failed for aiko-gateway"
+  # Build + validate the candidate in a TEMP file, and only swap it in on
+  # success — the live aiko.db is untouched until a valid replacement exists.
+  # The old DB is kept as a timestamped rescue copy inside the volume.
+  local rescue="aiko.db.rescue-$(date +%Y%m%d-%H%M%S)"
+  log "Building + validating candidate DB (live DB untouched until it passes)..."
+  if ! docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c '
+        set -e
+        rm -f /data/aiko.db.restore /data/aiko.db.restore-wal /data/aiko.db.restore-shm
+        sqlite3 /data/aiko.db.restore        # replay dump from stdin
+        integ=$(sqlite3 /data/aiko.db.restore "PRAGMA integrity_check;")
+        [ "$integ" = "ok" ] || { echo "integrity_check failed: $integ" >&2; exit 1; }
+        sqlite3 /data/aiko.db.restore ".tables" | grep -qw users || { echo "no users table in restored DB" >&2; exit 1; }
+        # Atomic-ish swap on the same filesystem: keep old as rescue, move new in.
+        [ -f /data/aiko.db ] && mv /data/aiko.db "/data/'"$rescue"'"
+        mv /data/aiko.db.restore /data/aiko.db
+        rm -f /data/aiko.db-wal /data/aiko.db-shm
+      ' < "$sql_file"; then
+    error "aiko-gateway restore FAILED validation — live DB left untouched. Restarting."
+    docker compose up -d
+    cleanup_backups
+    exit 1
+  fi
 
-  log "Restarting gateway..."
+  log "Restored OK (previous DB kept in the volume as $rescue). Restarting gateway..."
   docker compose up -d
 
   cleanup_backups
