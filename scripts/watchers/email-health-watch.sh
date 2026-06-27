@@ -122,6 +122,42 @@ clear_alerted() {
     rm -f "$CONFIG_DIR/$WATCHER_NAME.$1.alerted"
 }
 
+# domain_dns_detail <domain> — ENRICHMENT (not detection). Only called on the
+# unhealthy path to NAME which DNS record is broken. GET /senders/domains/{d}
+# returns a `dns_records` object whose entries each carry a `status` boolean
+# (true = verified, false/null = not). The 2026-06-20 incident was a missing
+# DMARC `rua` record — the cheap LIST endpoint can't see that granularity, this
+# can. Echoes one "  - <record>: not verified (status=<v>)" line per broken
+# record, or nothing if all records verify / detail is unavailable.
+#
+# DEFENSIVE: any API failure or unexpected shape returns empty (the caller then
+# falls back to the existing generic alert) — enrichment must never crash the
+# watcher or block the alert it decorates. Record keys are read generically
+# (Brevo mixes camelCase `dkim1Record` and snake_case `dmarc_record`), and a
+# `null` status is treated as not-verified but reported distinctly from `false`.
+domain_dns_detail() {
+    local domain="$1" json detail
+    json=$(brevo_get "/senders/domains/$domain") || return 0
+    detail=$(python3 -c '
+import json, sys
+try:
+    recs = json.loads(sys.stdin.read()).get("dns_records") or {}
+except Exception:
+    sys.exit(0)
+if not isinstance(recs, dict):
+    sys.exit(0)
+lines = []
+for name in sorted(recs):
+    entry = recs[name]
+    status = entry.get("status") if isinstance(entry, dict) else None
+    if status is not True:
+        shown = "null" if status is None else str(status).lower()
+        lines.append(f"  - {name}: not verified (status={shown})")
+print("\n".join(lines))
+' <<< "$json" 2>/dev/null) || return 0
+    printf '%s' "$detail"
+}
+
 # --- Checks -----------------------------------------------------------------
 # Each check fires tg() at most once/day (debounced) and clears its sentinel on
 # recovery. None of them transition the state machine — phase_a_check returns 1.
@@ -152,9 +188,26 @@ print("\n".join(problems))
     if [[ -n "$bad" ]]; then
         log "check_domain_auth: PROBLEMS: ${bad//$'\n'/ | }"
         if ! alerted_today domain_auth; then
-            local pretty
+            # ENRICHMENT: for each flagged domain, pull the per-domain DNS-record
+            # detail so the alert can name the broken record (DKIM/DMARC/brevo
+            # code) rather than just "domain unauthenticated". Only the unhealthy
+            # path pays this extra call — healthy cycles stay one cheap LIST call.
+            local detail_block="" dom dom_detail
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                dom="${line%%:*}"          # "<domain>: <reason>" → "<domain>"
+                dom_detail=$(domain_dns_detail "$dom")
+                if [[ -n "$dom_detail" ]]; then
+                    detail_block+="${dom} DNS records:"$'\n'"${dom_detail}"$'\n'
+                fi
+            done <<< "$bad"
+
+            local pretty extra=""
             pretty=$(html_escape "$bad")
-            tg "$(printf '🚨 <b>Brevo sending-domain auth FAILING</b>\n\nTransactional email (Outline resets, Kan magic links/invites, contact-form leads) will be silently dropped — Brevo accepts sends (250 OK) then rejects at processing.\n\n<pre>%s</pre>\nFix in Brevo → Senders, Domains &amp; IPs. <i>(2026-06-20 incident class.)</i>' "$pretty")"
+            if [[ -n "$detail_block" ]]; then
+                extra=$(printf '\n<b>Broken DNS records:</b>\n<pre>%s</pre>' "$(html_escape "${detail_block%$'\n'}")")
+            fi
+            tg "$(printf '🚨 <b>Brevo sending-domain auth FAILING</b>\n\nTransactional email (Outline resets, Kan magic links/invites, contact-form leads) will be silently dropped — Brevo accepts sends (250 OK) then rejects at processing.\n\n<pre>%s</pre>%s\nFix in Brevo → Senders, Domains &amp; IPs. <i>(2026-06-20 incident class.)</i>' "$pretty" "$extra")"
             mark_alerted domain_auth
         fi
     else
