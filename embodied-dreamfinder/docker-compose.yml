@@ -51,7 +51,13 @@ services:
       - KOKORO_VOICE=${KOKORO_VOICE:-bm_fable}
       - KOKORO_MODEL_DIR=/opt/kokoro
       - LD_LIBRARY_PATH=/opt/whisper/lib:/opt/whisper/ggml-lib
+      # ascend night-loop: bearer for POST /api/ascend/night + where the stored night persists.
+      # ASCEND_NIGHT_FILE points at the writable named volume below so the night survives a redeploy
+      # (it's also fine to lose — ascend re-delivers every morning — but a same-day restart keeps it).
+      - ASCEND_INGEST_KEY=${ASCEND_INGEST_KEY:-}
+      - ASCEND_NIGHT_FILE=/data/last-night.json
     volumes:
+      - embodied-dreamfinder-data:/data
       - /home/nick/whisper.cpp/build/bin:/opt/whisper/bin:ro
       - /home/nick/whisper.cpp/build/src:/opt/whisper/lib:ro
       - /home/nick/whisper.cpp/build/ggml/src:/opt/whisper/ggml-lib:ro
@@ -67,3 +73,7 @@ services:
 networks:
   imagineering:
     external: true
+
+# Persists the ascend night across container recreation (redeploys rebuild the container).
+volumes:
+  embodied-dreamfinder-data:

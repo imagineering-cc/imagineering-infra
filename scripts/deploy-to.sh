@@ -795,6 +795,8 @@ deploy_embodied_dreamfinder() {
         printf 'LYRA_SSH_KEY=%s\n'          "$(dotenv_quote "$(edf_field '.lyra_ssh_key')")"
         printf 'LYRA_SSH_HOST=%s\n'         "$(dotenv_quote "$(edf_field '.lyra_ssh_host' 'ubuntu@207.211.145.30')")"
         printf 'OPENAI_TTS_VOICE=%s\n'      "$(dotenv_quote "$(edf_field '.openai_tts_voice' 'sage')")"
+        # ascend night-loop ingest bearer (POST /api/ascend/night). Same secret as ascend's ASCEND_DF_KEY.
+        printf 'ASCEND_INGEST_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.ascend_ingest_key')")"
     } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Compose-file selection: only apply the lyra-live override (which mounts the
