@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified backup script for all services
 # Dumps databases/data, pushes to GitHub (imagineering-cc/imagineering-backups)
-# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|matrix|continuwuity]
+# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity]
 #
 # NOTE: downstream-server's DB backup moved to the downstream repo
 # (nickmeinhold/downstream deploy/oci/scripts/backup-downstream.sh, cron
@@ -213,12 +213,15 @@ backup_aiko_gateway() {
     rm -f "$tmp" "$err"
     return 1
   fi
-  # A COMPLETE .dump always terminates with `COMMIT;`. Its absence means empty,
-  # truncated, or errored output — reject it BEFORE it can overwrite a good
-  # backup (this DB is the sole copy of auth+messages+ACL; an empty backup is
-  # worse than none because restore would replay it over the live DB).
-  if ! grep -q '^COMMIT;' "$tmp"; then
-    error "aiko-gateway dump invalid (no COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
+  # A COMPLETE .dump's LAST non-blank line is exactly `COMMIT;`. Check the tail
+  # (end-anchored), not `grep '^COMMIT;'` — application data can contain a
+  # multiline string literal whose embedded line starts with `COMMIT;` and would
+  # fool a whole-file grep into accepting a truncated dump. An empty/truncated
+  # backup is worse than none here: restore would replay it over the sole live DB.
+  local lastline
+  lastline=$(grep -ve '^[[:space:]]*$' "$tmp" | tail -n1)
+  if [ "$lastline" != "COMMIT;" ]; then
+    error "aiko-gateway dump invalid (last line '$lastline', not COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
     rm -f "$tmp" "$err"
     return 1
   fi

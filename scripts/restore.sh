@@ -2,7 +2,7 @@
 # Restore script for all services
 # Restores from GitHub backup repo (imagineering-cc/imagineering-backups)
 # Usage: ./restore.sh <service>
-#   service: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity
+#   service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity
 #
 # Note: continuwuity requires the age private key path in $AGE_IDENTITY_FILE
 # (default: ~/.config/sops/age/keys.txt — same file SOPS uses; age will try
@@ -30,7 +30,7 @@ AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/
 
 if [ -z "$SERVICE" ]; then
   echo "Usage: $0 <service>"
-  echo "  service: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity"
+  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
   echo ""
   echo "Examples:"
   echo "  $0 kanbn         # Restore latest from GitHub backup"
@@ -217,8 +217,11 @@ restore_aiko_gateway() {
   if [ ! -s "$sql_file" ]; then
     error "No (non-empty) aiko-gateway.sql in backup repo"; cleanup_backups; exit 1
   fi
-  if ! grep -q '^COMMIT;' "$sql_file"; then
-    error "aiko-gateway.sql looks truncated/invalid (no COMMIT;)"; cleanup_backups; exit 1
+  # End-anchored completeness check (see backup.sh): the LAST non-blank line of a
+  # complete sqlite .dump is exactly `COMMIT;`. A whole-file grep could be fooled
+  # by `COMMIT;` embedded in multiline data, accepting a truncated dump.
+  if [ "$(grep -ve '^[[:space:]]*$' "$sql_file" | tail -n1)" != "COMMIT;" ]; then
+    error "aiko-gateway.sql looks truncated/invalid (last line is not COMMIT;)"; cleanup_backups; exit 1
   fi
 
   # Irreversible: replacing the sole auth+message store. Require typed consent.
@@ -246,10 +249,23 @@ restore_aiko_gateway() {
         integ=$(sqlite3 /data/aiko.db.restore "PRAGMA integrity_check;")
         [ "$integ" = "ok" ] || { echo "integrity_check failed: $integ" >&2; exit 1; }
         sqlite3 /data/aiko.db.restore ".tables" | grep -qw users || { echo "no users table in restored DB" >&2; exit 1; }
-        # Atomic-ish swap on the same filesystem: keep old as rescue, move new in.
-        [ -f /data/aiko.db ] && mv /data/aiko.db "/data/'"$rescue"'"
-        mv /data/aiko.db.restore /data/aiko.db
-        rm -f /data/aiko.db-wal /data/aiko.db-shm
+        # Failure-safe swap. Preserve the OLD db AND its WAL/SHM as the rescue
+        # (an uncheckpointed WAL holds committed-but-unmerged data; rescuing only
+        # aiko.db would lose it). Then move the validated candidate in; if THAT
+        # mv fails, roll the rescue back so we never end up with no aiko.db.
+        rescue="'"$rescue"'"
+        if [ -f /data/aiko.db ]; then
+          mv /data/aiko.db "/data/$rescue"
+          [ -f /data/aiko.db-wal ] && mv /data/aiko.db-wal "/data/$rescue-wal" || true
+          [ -f /data/aiko.db-shm ] && mv /data/aiko.db-shm "/data/$rescue-shm" || true
+        fi
+        if ! mv /data/aiko.db.restore /data/aiko.db; then
+          [ -f "/data/$rescue" ] && mv "/data/$rescue" /data/aiko.db
+          [ -f "/data/$rescue-wal" ] && mv "/data/$rescue-wal" /data/aiko.db-wal || true
+          [ -f "/data/$rescue-shm" ] && mv "/data/$rescue-shm" /data/aiko.db-shm || true
+          echo "swap failed; rolled back to original DB" >&2
+          exit 1
+        fi
       ' < "$sql_file"; then
     error "aiko-gateway restore FAILED validation — live DB left untouched. Restarting."
     docker compose up -d
