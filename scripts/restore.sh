@@ -199,6 +199,42 @@ restore_claudius() {
   log "Claudius restore complete!"
 }
 
+# Restore the aiko-chat-gateway SQLite store from the latest .sql dump in the
+# backup repo. Mirrors the matrix-bridge sqlite restore: stop the container
+# (never replay against a live DB), replace the DB from the dump inside the
+# sqlite-dumper image (rw mount), restart. The dump carries the current schema
+# (email col, nullable password_hash, social_identities), so the gateway's boot
+# schema guard passes after restore. aiko_chat_gateway#4.
+restore_aiko_gateway() {
+  log "Restoring aiko-chat-gateway..."
+
+  fetch_backups
+
+  local sql_file="$BACKUP_CLONE_DIR/aiko-gateway.sql"
+  if [ ! -f "$sql_file" ]; then
+    error "No aiko-gateway.sql found in backup repo"
+    cleanup_backups
+    exit 1
+  fi
+
+  log "Stopping gateway..."
+  cd ~/apps/aiko-chat-gateway
+  docker compose stop
+
+  log "Restoring DB from aiko-gateway.sql..."
+  # Remove the old DB + WAL/SHM first so stale write-ahead state can't corrupt
+  # the restore, then replay the dump into a fresh aiko.db (rw mount).
+  docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c \
+    "rm -f /data/aiko.db /data/aiko.db-wal /data/aiko.db-shm && sqlite3 /data/aiko.db" < "$sql_file" || \
+    error "Restore failed for aiko-gateway"
+
+  log "Restarting gateway..."
+  docker compose up -d
+
+  cleanup_backups
+  log "aiko-gateway restore complete!"
+}
+
 # Restore matrix bridges + relay-bot SQLite DBs from latest SQL dumps in the
 # backup repo. Each .sql file is replayed against a fresh SQLite DB inside
 # the bridge's volume. Bridges must be stopped before the replay (writing
@@ -351,6 +387,9 @@ case $SERVICE in
   claudius)
     restore_claudius
     ;;
+  aiko-gateway)
+    restore_aiko_gateway
+    ;;
   matrix)
     restore_matrix
     ;;
@@ -359,7 +398,7 @@ case $SERVICE in
     ;;
   *)
     error "Unknown service: $SERVICE"
-    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity"
+    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
     exit 1
     ;;
 esac

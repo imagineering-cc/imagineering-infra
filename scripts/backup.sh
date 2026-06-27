@@ -187,6 +187,35 @@ backup_matrix() {
   log "Matrix backup complete"
 }
 
+# aiko-chat-gateway: the gateway's local SQLite store is the SOLE copy of message
+# history + auth credentials + the ACL/membership overlay. Per the #1281
+# HyperSpace-source-of-truth redesign, HyperSpace holds only channel/user
+# EXISTENCE; everything else lives in this one file on the named volume. A
+# `docker volume rm` or host disk loss would vaporize every account with no
+# second copy (aiko_chat_gateway#4). The gateway image ships no sqlite3, so —
+# like the matrix bridges — mount the volume read-only into sqlite-dumper and
+# `.dump` to text SQL (git-diffable). Online-safe: `.dump` reads a consistent
+# snapshot; the read-only mount can't perturb the live DB.
+backup_aiko_gateway() {
+  log "Backing up aiko-chat-gateway..."
+
+  local out="$BACKUP_DIR/aiko-gateway-$DATE.sql.gz"
+
+  if ! docker run --rm -v "aiko-chat-gateway_aiko_gateway_data:/data:ro" sqlite-dumper:latest \
+    sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump 2>/dev/null \
+     | gzip > "$out"; then
+    error "aiko-gateway sqlite3 .dump failed"
+    rm -f "$out"
+    return 1
+  fi
+  if [ ! -s "$out" ]; then
+    error "aiko-gateway dump produced empty output"
+    rm -f "$out"
+    return 1
+  fi
+  log "aiko-gateway backup complete: $(basename "$out") ($(du -h "$out" | cut -f1))"
+}
+
 # Triggers Continuwuity's online RocksDB checkpoint via the admin API
 # (`!admin server backup-database`). Each run wipes the in-volume backup
 # dir first, then triggers the admin command which writes a fresh
@@ -457,7 +486,7 @@ cleanup_old_backups() {
 case $SERVICE in
   all)
     SUCCEEDED=()
-    for svc in kanbn outline radicale pm-bot claudius; do
+    for svc in kanbn outline radicale pm-bot claudius aiko-gateway; do
       if "backup_${svc//-/_}"; then
         SUCCEEDED+=("$svc")
       else
@@ -509,6 +538,9 @@ case $SERVICE in
   claudius)
     backup_claudius && backup_to_github claudius || FAILED_SERVICES+=(claudius)
     ;;
+  aiko-gateway)
+    backup_aiko_gateway && backup_to_github aiko-gateway || FAILED_SERVICES+=(aiko-gateway)
+    ;;
   matrix)
     if backup_matrix; then
       backup_to_github matrix-discord matrix-signal matrix-telegram \
@@ -525,7 +557,7 @@ case $SERVICE in
     cleanup_old_backups
     ;;
   *)
-    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|matrix|continuwuity|cleanup]"
+    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity|cleanup]"
     exit 1
     ;;
 esac
