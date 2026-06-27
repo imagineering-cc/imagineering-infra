@@ -236,7 +236,8 @@ restore_aiko_gateway() {
   # Build + validate the candidate in a TEMP file, and only swap it in on
   # success — the live aiko.db is untouched until a valid replacement exists.
   # The old DB is kept as a timestamped rescue copy inside the volume.
-  local rescue="aiko.db.rescue-$(date +%Y%m%d-%H%M%S)"
+  local rescue
+  rescue="aiko.db.rescue-$(date +%Y%m%d-%H%M%S)"
   log "Building + validating candidate DB (live DB untouched until it passes)..."
   if ! docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c '
         set -e
