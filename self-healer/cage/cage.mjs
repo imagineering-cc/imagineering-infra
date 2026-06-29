@@ -36,13 +36,14 @@ export const CAGE_UID_GID = '1000:1000';
  * @param {string} o.workdirHost  host path of the FRESH single-repo clone, bind-mounted rw at /work
  * @param {string} o.proxyUrl     e.g. http://cage-egress-proxy:3128 — the ONLY egress path
  * @param {string} [o.name]       container name (ephemeral)
- * @param {Record<string,string>} [o.env]  extra env (e.g. a repo-scoped GH token). NEVER host secrets.
+ * @param {Record<string,string>} [o.env]  extra VALUE-carrying env (non-secret context). A value here lands in the argv (host `ps`), so NEVER a secret — for a secret use passEnv.
+ * @param {string[]} [o.passEnv]  env var NAMES passed through key-only (`-e NAME`, no value) — docker reads the VALUE from the SPAWNING process's env, so a SECRET (a repo-scoped token) never appears in this argv / host `ps` (cage-match #114, Maxwell F1). Caller must have the var set in its own env.
  * @param {string} o.cmd          the command to run (e.g. "claude" or, in the probe, "sh")
  * @param {string[]} [o.args]     args to cmd
  * @param {string} [o.userGid]    forced non-root uid:gid (default CAGE_UID_GID); never trusts the image
  * @returns {{bin: string, argv: string[]}}
  */
-export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env = {}, cmd, args = [], userGid = CAGE_UID_GID }) {
+export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env = {}, passEnv = [], cmd, args = [], userGid = CAGE_UID_GID }) {
   if (!image) throw new Error('cage: image required');
   if (!network) throw new Error('cage: internal network required');
   if (!workdirHost) throw new Error('cage: workdirHost required');
@@ -73,8 +74,18 @@ export function buildCageArgv({ image, network, workdirHost, proxyUrl, name, env
   argv.push('-v', `${workdirHost}:/work:rw`, '-w', '/work');
   argv.push('--tmpfs', '/tmp:rw,noexec,nosuid,size=64m');
 
+  // Key-only `-e NAME` pass-through: docker reads NAME's VALUE from the SPAWNING
+  // process's env, so a secret (the repo-scoped token) rides in the docker
+  // client's env, NEVER in this argv / host `ps` (cage-match #114, Maxwell F1).
+  // Disjoint by construction from `env` and the proxy keys.
+  for (const k of passEnv) {
+    argv.push('-e', k); // bare name, no "=value"
+  }
+
   // Caller env first, proxy env LAST so a caller can never clobber the egress
-  // routing (a clobbered HTTPS_PROXY would let the agent egress directly).
+  // routing (a clobbered HTTPS_PROXY would let the agent egress directly). The
+  // spread dedupes by key, so a caller-set proxy key is OVERWRITTEN (not
+  // duplicated) by proxyEnv — docker's last-wins then can't be turned against us.
   for (const [k, v] of Object.entries({ ...env, ...proxyEnv })) {
     argv.push('-e', `${k}=${v}`);
   }

@@ -91,6 +91,30 @@ test('a caller cannot clobber the egress proxy via env (proxy wins last, exactly
   }
 });
 
+test('passEnv emits key-only -e (secret value rides in the client env, never argv) — cage-match #114 F1', () => {
+  const { argv } = buildCageArgv({ ...base, passEnv: ['GH_TOKEN', 'GITHUB_TOKEN'] });
+  // Each name is emitted as a BARE `-e NAME` (no "=value"), so a host `ps` of the
+  // docker run never reveals the token value.
+  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN']) {
+    const i = argv.indexOf(name);
+    assert.notEqual(i, -1, `${name} present`);
+    assert.equal(argv[i - 1], '-e', `${name} emitted as -e ${name}`);
+  }
+  // and crucially NO value-carrying `-e GH_TOKEN=<anything>` anywhere in the argv.
+  const eValues = argv.filter((_, i) => argv[i - 1] === '-e');
+  assert.ok(!eValues.some((e) => /^GH_TOKEN=/.test(e)), 'no GH_TOKEN=value in argv');
+  assert.ok(!eValues.some((e) => /^GITHUB_TOKEN=/.test(e)), 'no GITHUB_TOKEN=value in argv');
+});
+
+test('passEnv does not disturb the proxy-wins-last guarantee (still exactly one HTTPS_PROXY)', () => {
+  const { argv } = buildCageArgv({ ...base, env: { HOME: '/work' }, passEnv: ['GH_TOKEN'] });
+  const eValues = argv.filter((_, i) => argv[i - 1] === '-e');
+  for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
+    assert.equal(eValues.filter((e) => e.startsWith(`${k}=`)).length, 1, `exactly one ${k}`);
+  }
+  assert.ok(eValues.includes('HOME=/work'), 'value-carrying env still passes');
+});
+
 test('buildCageArgv ends with image then the command + args', () => {
   const { argv } = buildCageArgv(base);
   const img = argv.indexOf('cage-agent:latest');

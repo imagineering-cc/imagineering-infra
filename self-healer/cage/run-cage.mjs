@@ -50,12 +50,48 @@ function resolveInternalNetwork(network) {
 }
 const networkId = resolveInternalNetwork(process.env.CAGE_NETWORK);
 
+// Forward a BOUNDED allowlist into the cage (the green-auto credential path). Set
+// by the orchestrator (src/auto.mjs), absent in the escape probe — so this block
+// is a no-op for the probe and its flags stay byte-identical:
+//   - CAGE_GH_TOKEN  → GH_TOKEN + GITHUB_TOKEN, passed KEY-ONLY (`-e GH_TOKEN`):
+//     the repo-scoped token the agent authenticates `git`/`gh` with. Its VALUE is
+//     exported into THIS process's env (inherited by the spawned docker) so docker
+//     reads it from the client env — it never lands in the argv / host `ps`
+//     (cage-match #114, Maxwell F1). cage.mjs bounds reachability; token scope
+//     bounds authority (cage/README.md "Credential scope").
+//   - CAGE_AGENT_*   → value-carrying (non-secret task context: repo, finding
+//     signature/diagnosis/action, fingerprint), already scrubbed+capped.
+//   - HOME=/work     → the writable-HOME the real agent needs (the residual
+//     cage/README.md assigns to the orchestrator); only when a token is present.
+// NOTHING else crosses, and buildCageArgv appends the proxy routing LAST so none
+// of these can clobber egress (a clobbered HTTPS_PROXY would mean direct egress).
+function forwardedCageEnv() {
+  const setEnv = {}; // value-carrying (non-secret) → `-e k=v`
+  const passNames = []; // key-only (secret) → `-e NAME`, value from this process's env
+  const tok = process.env.CAGE_GH_TOKEN;
+  if (tok) {
+    // Export the token into our OWN env so the inherited docker child can read it
+    // for the key-only pass-through; the value stays out of the argv.
+    process.env.GH_TOKEN = tok;
+    process.env.GITHUB_TOKEN = tok;
+    passNames.push('GH_TOKEN', 'GITHUB_TOKEN');
+    setEnv.HOME = '/work';
+  }
+  for (const k of Object.keys(process.env)) {
+    if (k.startsWith('CAGE_AGENT_')) setEnv[k] = process.env[k];
+  }
+  return { setEnv, passNames };
+}
+
+const { setEnv, passNames } = forwardedCageEnv();
 const { bin, argv } = buildCageArgv({
   image: process.env.CAGE_IMAGE,
   network: networkId, // the inspected Id, not the name — closes the inspect→run race
   workdirHost: process.env.CAGE_WORKDIR,
   proxyUrl: process.env.CAGE_PROXY_URL,
   name: process.env.CAGE_NAME,
+  env: setEnv,
+  passEnv: passNames,
   cmd,
   args,
 });
