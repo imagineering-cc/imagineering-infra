@@ -178,3 +178,46 @@ Verified on the box (`149.118.69.221`, Ubuntu 24.04 aarch64):
 
 Net: Docker is the production-substrate-correct mechanism here. The egress filter
 that bwrap/systemd would have provided is delivered by `--internal` + the proxy.
+
+## Provisioning the monster (on-box — the gate to turning green-auto ON)
+
+green-auto ships **OFF**: `src/auto.mjs` refuses to spawn until ALL of the gates
+below are set, and they are unset by default. Turning it on is a deliberate on-box
+act, done in this order (each step is the precondition for the next):
+
+1. **Build the agent image** on the box (arm64; build needs egress, the cage's
+   no-egress is a runtime property):
+   ```sh
+   docker build -f cage/Dockerfile.agent -t self-healer-agent:latest self-healer/cage/
+   ```
+2. **Create the cage networks + egress proxy** (the same shapes the probe builds):
+   an `--internal` network for the agent, an egress network for the proxy, the
+   proxy container on BOTH with `CAGE_ALLOW_HOSTS=api.github.com,.github.com,api.anthropic.com`.
+3. **Run the escape probe LIVE** — *this is the gate, not a config read*:
+   ```sh
+   bash self-healer/cage/escape-probe.sh   # exit 0 iff every escape is blocked AND every legit path works
+   ```
+   Do not proceed unless it exits 0. A broken-OPEN cage must never be armed.
+4. **Provision a fine-grained, repo-scoped PAT** (or App installation token) scoped
+   to ONLY the target repo — this is the `HEALER_GREEN_AUTO_TOKEN` gate 3 enforces
+   distinct-from-the-broad-host-token. The cage bounds reachability; this bounds
+   authority. A control-repo reachability probe (token must 404/403 a forbidden
+   repo) is the recommended manual check before arming.
+5. **Set the gate env** in the file the self-healer cron sources (the same env the
+   read-only stages already read; NOT a world-readable path):
+   ```sh
+   HEALER_GREEN_AUTO=1
+   HEALER_GREEN_AUTO_TOKEN=<fine-grained repo-scoped PAT>     # gate 3 (authority)
+   HEALER_CAGE_IMAGE=self-healer-agent:latest                 # gate 4
+   HEALER_CAGE_NETWORK=<the --internal network name>          # gate 4
+   HEALER_CAGE_PROXY_URL=http://<proxy-name>:3128             # gate 4
+   HEALER_CAGE_CLAUDE_TOKEN=<Max-plan CLAUDE_CODE_OAUTH_TOKEN># gate 4 (inference)
+   HEALER_CAGE_AGENT_CMD=node /opt/self-healer/agent-entrypoint.mjs  # gate 5
+   ```
+6. **Smoke a single real green finding** with the flag on, watch it draft a PR, and
+   confirm the PR is a DRAFT against the right repo with the self-healer provenance
+   in its body. Foreground the first run (verify each step) — do not cron-arm it
+   until one finding has gone end-to-end and been reviewed.
+
+Remaining beyond this PR (tracked, not in scope here): the Telegram lifecycle notify
++ two-way "yes merge" approve loop (the merge gate stays human regardless).
