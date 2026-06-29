@@ -239,11 +239,12 @@ async function prepareWorkdir(repo, token) {
   return dir;
 }
 
-/** Best-effort removal of a finished cage's host clone dir, so /tmp doesn't
- * accumulate one clone per run (cage-match #114, Maxwell F2 + Carnot). on-box =
- * same filesystem, so a direct rm suffices; if chown handed the dir to the cage
- * uid (1000) in sticky /tmp the healer user (1002) may be unable to remove it —
- * tolerated, since it's a leak not a vuln and the dir is a shallow throwaway. */
+/** Best-effort removal of a finished cage's host clone dir, so the workroot
+ * doesn't accumulate one clone per run (cage-match #114, Maxwell F2 + Carnot).
+ * The clone lives under a non-sticky, healer-owned workroot (see CLONE_SCRIPT),
+ * so even when chown hands the dir to the cage uid (1000) the healer (1002) can
+ * still unlink it — unlink permission comes from WRITE on the non-sticky parent,
+ * not file ownership. The try/catch stays as a belt-and-braces backstop. */
 function cleanupWorkdir(dir) {
   if (!dir) return;
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort; see note */ }
