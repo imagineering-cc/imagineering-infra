@@ -18,6 +18,7 @@ import {
   buildRunCageSpawn,
   autoFixIfActionable,
   RUN_CAGE_PATH,
+  CLONE_SCRIPT,
 } from '../src/auto.mjs';
 
 /** Run `fn` with a fully-cleared green-auto/cage env, restoring after. */
@@ -152,6 +153,41 @@ test('autoFixIfActionable: flag on but remote (HEALER_HOST set) → single refus
     assert.equal(out[0].action, 'refused');
     assert.match(out[0].detail, /on-box only/);
   });
+});
+
+test('autoFixIfActionable: gate 2 honors the PASSED env, not process.env (cage-match #114, Carnot)', async () => {
+  // process.env has NO HEALER_HOST (withEnv clears it); HEALER_HOST is supplied
+  // ONLY via the explicit env arg. Before the fix, isOnBox() read process.env and
+  // wrongly passed gate 2 (would have fallen through to the token gate); now
+  // isOnBox(env) reads the SAME env object the other gates use and refuses remote.
+  await withEnv({}, async () => {
+    assert.equal(process.env.HEALER_HOST, undefined); // precondition: not in process.env
+    const out = await autoFixIfActionable(
+      { findings: [greenFinding()] },
+      {
+        HEALER_GREEN_AUTO: '1',
+        HEALER_HOST: 'nick@host', // remote — must trip gate 2 via the passed env
+        HEALER_GREEN_AUTO_TOKEN: 'repo-scoped-xyz',
+        HEALER_CAGE_IMAGE: 'i', HEALER_CAGE_NETWORK: 'n',
+        HEALER_CAGE_PROXY_URL: 'p', HEALER_CAGE_AGENT_CMD: 'a',
+      },
+    );
+    assert.equal(out.length, 1);
+    assert.equal(out[0].action, 'refused');
+    assert.match(out[0].detail, /on-box only/); // the gate-2 refusal, not the token/substrate one
+  });
+});
+
+test('CLONE_SCRIPT: the repo-scoped token rides via STDIN, never a positional arg (cage-match #114)', () => {
+  // The consensus finding: a positional token is base64-decodable in host `ps`.
+  // Lock the fix — token comes from stdin ($(cat)), and only repo ($1) + uid:gid
+  // ($2) are positionals (no $3, which is where the token used to be).
+  assert.match(CLONE_SCRIPT, /tok=\$\(cat\)/); // token from stdin
+  assert.doesNotMatch(CLONE_SCRIPT, /\$3/); // no third positional (token is gone from argv)
+  // And the clone lives under a non-sticky, healer-owned workroot so cleanup can't
+  // leak a chowned dir from sticky /tmp (Carnot HIGH).
+  assert.match(CLONE_SCRIPT, /workroot=/);
+  assert.doesNotMatch(CLONE_SCRIPT, /mktemp -d \/tmp\/healer-green-auto/); // not bare sticky /tmp
 });
 
 test('autoFixIfActionable: on-box + flag on but no bounded token → refusal, no spawn', async () => {

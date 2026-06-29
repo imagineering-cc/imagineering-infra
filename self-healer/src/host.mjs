@@ -164,7 +164,10 @@ export function runOnHostScript(fixedScript, args = [], { stdin, timeoutMs = 70_
   return spawnBuffered(bin, argv, { stdin, timeoutMs, label: fixedScript });
 }
 
-/** True when we're running directly on the OCI box (no SSH hop). */
-export function isOnBox() {
-  return !process.env.HEALER_HOST;
+/** True when we're running directly on the OCI box (no SSH hop). Takes an explicit
+ * `env` so a caller (e.g. green-auto's gate 2) evaluates on-box-ness against the
+ * SAME env object as its other gates, rather than silently reading process.env out
+ * from under a passed env (cage-match #114, Carnot — fail closed against one env). */
+export function isOnBox(env = process.env) {
+  return !env.HEALER_HOST;
 }

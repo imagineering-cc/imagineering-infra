@@ -29,9 +29,13 @@
 //
 // The per-finding loop reuses green-draft's machinery verbatim: the SAME
 // actionable-finding filter, the SAME fingerprint, and the SAME single-box
-// owner-fenced lock (acquireDraftLock/releaseDraftLock) — so a green-draft run
-// and a green-auto run on one box never contend on the same finding, and the two
-// stages agree on "what is actionable" by construction.
+// owner-fenced lock (acquireDraftLock/releaseDraftLock) — so two CONCURRENT healer
+// PROCESSES on one box never act on the same finding twice, and the two stages
+// agree on "what is actionable" by construction. NOTE: the lock is concurrent-
+// process exclusion, NOT draft-vs-auto mutual exclusion: healer.mjs runs draft to
+// completion THEN auto, each acquiring+releasing per finding, so with BOTH flags
+// on a single run files an issue AND runs the caged agent for the same finding
+// (by design — the issue documents what the agent is fixing).
 //
 // What this orchestrator deliberately does NOT do: open the PR, merge, or deploy.
 // Those happen (eventually) INSIDE/after the caged agent, bounded by the
@@ -171,19 +175,36 @@ export function buildRunCageSpawn({ finding, repo, workdirHost, token, substrate
 }
 
 // Fixed host script: clone the target repo into a FRESH throwaway dir and make it
-// writable by the cage uid (the host user is 1002, the cage forces 1000). Untrusted
-// values arrive as base64 positionals ($1 repo, $2 token, $3 uid:gid) decoded
+// writable by the cage uid (the host user is 1002, the cage forces 1000). The
+// non-secret values arrive as base64 positionals ($1 repo, $2 uid:gid) decoded
 // on-box — the injection-safe host primitive (see host.mjs buildHostScriptArgv).
-// The token never touches argv: it is handed to git via a transient GIT_ASKPASS
-// helper that echoes it from the process env, then removed. Only the workdir path
-// is printed to stdout; all git chatter goes to stderr.
-const CLONE_SCRIPT = [
+//
+// The TOKEN arrives on STDIN, never as a positional (cage-match #114, Maxwell F1
+// + Carnot HIGH): base64 is reversible, so a positional token would sit decodable
+// in the host process argv (`ps` / /proc/<pid>/cmdline, world-readable by default)
+// for the clone's duration — the exact `token not in argv` property the cage-spawn
+// step (run-cage.mjs key-only `-e`) is built to hold. stdin is a pipe: invisible
+// to the process table, and ssh forwards it on the remote path. git reads it via a
+// transient GIT_ASKPASS helper, then it's removed. Only the workdir path is printed
+// to stdout; all git chatter goes to stderr.
+export const CLONE_SCRIPT = [
   'set -euo pipefail',
   'repo=$(printf %s "$1" | base64 -d)',
-  'tok=$(printf %s "$2" | base64 -d)',
-  'ug=$(printf %s "$3" | base64 -d)',
-  'dir=$(mktemp -d /tmp/healer-green-auto.XXXXXX)',
-  'askpass=$(mktemp /tmp/healer-askpass.XXXXXX)',
+  'ug=$(printf %s "$2" | base64 -d)',
+  // The repo-scoped token, read from stdin (see header). $(cat) consumes the whole
+  // pipe and strips a trailing newline, so a sloppily-sourced token is sanitized.
+  'tok=$(cat)',
+  // Clone under a HEALER-OWNED, non-sticky workroot — NOT bare /tmp, which is
+  // sticky. In a sticky dir only the file's owner may unlink it, so if the clone
+  // is chowned to the cage uid (1000) the healer (1002) could no longer remove it
+  // → a systematic leak of shallow clones (cage-match #114, Carnot HIGH). In a
+  // non-sticky, healer-owned parent, unlink permission comes from WRITE on the
+  // parent dir, not file ownership, so cleanupWorkdir always succeeds regardless
+  // of the chown. mkdir -p is idempotent; the healer owns the workroot it creates.
+  'workroot="${HEALER_GREEN_AUTO_WORKROOT:-/tmp/self-healer-green-auto}"',
+  'mkdir -p "$workroot"',
+  'dir=$(mktemp -d "$workroot/clone.XXXXXX")',
+  'askpass=$(mktemp "$workroot/askpass.XXXXXX")',
   "printf '#!/bin/sh\\nprintf %%s \"$HEALER_CLONE_TOKEN\"\\n' > \"$askpass\"",
   'chmod 0700 "$askpass"',
   'if ! HEALER_CLONE_TOKEN="$tok" GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \\',
@@ -193,7 +214,8 @@ const CLONE_SCRIPT = [
   'rm -f "$askpass"',
   // Make the clone writable by the cage uid. chown needs privilege; fall back to
   // a world-writable throwaway (the dir is ephemeral and host-isolated) so the
-  // cage uid can write even where the deploy user can't chown.
+  // cage uid can write even where the deploy user can't chown. Either way the
+  // non-sticky workroot above keeps the dir removable by the healer.
   'chown -R "$ug" "$dir" 2>/dev/null || chmod -R 0777 "$dir"',
   'printf %s "$dir"',
 ].join('\n');
@@ -207,7 +229,9 @@ const CAGE_UID_GID = '1000:1000';
  * throw path leaves nothing behind. A SUCCESSFUL clone's dir is the caller's to
  * remove — see cleanupWorkdir. */
 async function prepareWorkdir(repo, token) {
-  const { stdout, stderr, code } = await runOnHostScript(CLONE_SCRIPT, [repo, token, CAGE_UID_GID], { timeoutMs: 120_000 });
+  // Token via stdin (NOT a positional) so it never lands in host argv/`ps`; repo +
+  // uid:gid are non-secret and ride as base64 positionals (cage-match #114).
+  const { stdout, stderr, code } = await runOnHostScript(CLONE_SCRIPT, [repo, CAGE_UID_GID], { stdin: token, timeoutMs: 120_000 });
   const dir = stdout.trim();
   if (code !== 0 || !dir) {
     throw new Error(`workdir clone failed (code ${code}): ${stderr.trim().slice(0, 200)}`);
@@ -255,7 +279,8 @@ export async function autoFixIfActionable(verdict, env = process.env) {
   if (env.HEALER_GREEN_AUTO !== '1') return [];
 
   // Gate 2: the cage is a box-local Docker primitive — refuse remote runs.
-  if (!isOnBox()) {
+  // Evaluate against the SAME `env` as the other gates (cage-match #114, Carnot).
+  if (!isOnBox(env)) {
     return [{ container: '*', action: AUTO_ACTIONS.REFUSED, detail: 'green-auto runs on-box only (the cage is a host-local Docker primitive); unset HEALER_HOST to run on the box' }];
   }
 
