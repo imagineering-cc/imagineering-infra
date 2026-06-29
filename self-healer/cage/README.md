@@ -83,11 +83,13 @@ The `priv-esc` case deliberately uses a **root** probe image (`Dockerfile.probe`
 
 | id | attempt | expected |
 |---|---|---|
-| `allow-inference` | reach the inference brain **through the proxy** | 2xx/expected |
+| `allow-inference` | reach `api.anthropic.com` (the codegen agent's inference endpoint) **through the proxy** | a real HTTP status (401/404/405) — the tunnel opened |
 | `allow-github` | reach `api.github.com` **through the proxy** | 2xx |
 | `workdir-rw` | write+read a file in the clone workdir | ok |
-| `token-forward` | with `CAGE_GH_TOKEN` set, `$GITHUB_TOKEN`/`$GH_TOKEN` inside the cage match it | forwarded (the agent can auth) |
+| `token-forward` | with `CAGE_GH_TOKEN` set, `$GITHUB_TOKEN`/`$GH_TOKEN` inside the cage match it | forwarded (the agent can auth `git`/`gh`) |
 | `token-not-leaked` | with `CAGE_GH_TOKEN` **unset**, no GitHub token in the cage env | absent (no stray credential) |
+| `claude-token-forward` | with `CAGE_CLAUDE_TOKEN` set, `$CLAUDE_CODE_OAUTH_TOKEN` inside the cage matches it | forwarded (the agent can auth inference) |
+| `claude-token-not-leaked` | with `CAGE_CLAUDE_TOKEN` **unset**, no `CLAUDE_CODE_OAUTH_TOKEN` in the cage — *even though the operator's own shell has it exported* | absent (the shared Max token never silently rides in) |
 
 A cage that fails an escape-FAIL case is **broken open** (the dangerous direction).
 A cage that fails a MUST-SUCCEED case is **broken shut** (green-auto can't work, but
@@ -95,20 +97,32 @@ it's safe) — fix forward, never relax an escape gate to make a success case pa
 
 ## Known residuals (named, not hidden)
 
-- **Writable `HOME` for the real agent.** `--read-only` + only `/work`/`/tmp`
-  writable means a real `claude -p` (writes `~/.claude`) and `git` (writes
-  `$HOME`) will fail until the orchestrator gives the agent a writable HOME
-  (`HOME=/work`, or a small tmpfs). The probe used `alpine sh`, which needs none.
-  Owned by the orchestrator/real-image PR. *Broken-shut, not broken-open.*
+- **Writable `HOME` for the real agent.** ✅ *Resolved.* `--read-only` + only
+  `/work`/`/tmp` writable would make a real `claude -p` (writes `~/.claude`) and
+  `git` (writes `$HOME`) fail. `run-cage.mjs` now forwards `HOME=/work` into the
+  cage whenever EITHER agent token (`CAGE_GH_TOKEN` / `CAGE_CLAUDE_TOKEN`) is
+  present, so the agent writes its state into the one writable reservoir (the
+  clone), never the read-only rootfs. The probe used `alpine sh`, which needs none.
 - **Same-subnet host bridge IP.** The probe proves the *default* bridge gateway
   (`172.17.0.1`) and `host.docker.internal` are unreachable, but does not yet
   probe the internal network's *own* in-subnet gateway IP. Docker binds no host
   services to an internal bridge by default, so there's nothing there today;
   flagged as the next probe to add if any host service is ever bound to it.
-- **Inference host in the allowlist.** The allowlist is only as strong as its
-  entries. The inference endpoint added alongside GitHub must not be an open
-  redirect / SSRF-amplifier / surprisingly-CDN-fronted host. The resolved-IP
-  guard blocks *internal* targets but not a *public* open-proxy.
+- **Inference host in the allowlist.** `api.anthropic.com` is now wired into the
+  egress allowlist (and the `allow-inference` probe case), with the agent's
+  inference credential forwarded key-only as `CAGE_CLAUDE_TOKEN` →
+  `CLAUDE_CODE_OAUTH_TOKEN`. The named residual stands: the allowlist is only as
+  strong as its entries — `api.anthropic.com` must not be an open redirect /
+  SSRF-amplifier / surprisingly-CDN-fronted host. The resolved-IP guard blocks
+  *internal* targets but not a *public* open-proxy. (Anthropic's API host is a
+  fixed, non-redirecting JSON endpoint, so this is low-risk but unenforced.)
+- **Inference token exfil via the PR.** The cage bounds the agent's *reachability*
+  to two hosts; it does NOT stop a fully-subverted agent from writing the
+  `CLAUDE_CODE_OAUTH_TOKEN` it holds *into its own PR diff* (the GH token is
+  repo-scoped, so it can only push to the one target repo — but a secret in a draft
+  PR is still a leak). Bounded by: the PR is a DRAFT, cage-match + human review gate
+  it before merge, and the token is the rotatable shared Max token. *Named, not
+  enforced* — a future secret-scan of the agent's diff before push would close it.
 
 ## Credential scope (boundary, partly outside the OS cage)
 
@@ -129,6 +143,22 @@ alongside `HOME=/work` and the scrubbed `CAGE_AGENT_*` task context; nothing els
 narrowing is the operator's provisioning duty. A control-repo reachability probe
 (reach a forbidden repo with the token, expect 404/403) to verify the bound online
 is the next gate to add.
+
+### The inference credential (`CLAUDE_CODE_OAUTH_TOKEN`)
+
+The codegen agent runs `claude -p` against `api.anthropic.com`, so it needs an
+inference token *inside* the cage. Unlike the GitHub token this one is **not
+bounded-distinct** — it is the shared Max-plan OAuth token by nature; there is
+nothing to scope it down to. So the gate is "present, fail-closed":
+`src/auto.mjs`'s `cageSubstrate` refuses to spawn unless `HEALER_CAGE_CLAUDE_TOKEN`
+is set, and it reaches the cage **key-only** as `CAGE_CLAUDE_TOKEN` →
+`CLAUDE_CODE_OAUTH_TOKEN` (the same `-e NAME`, value-from-client-env discipline as
+the GH token, so it never lands in argv / host `ps`). Crucially, `run-cage.mjs`
+forwards it ONLY via that explicit indirection — **never by ambient name** — so the
+operator's own shell having `CLAUDE_CODE_OAUTH_TOKEN` exported does NOT leak it into
+the cage (the `claude-token-not-leaked` probe asserts exactly this). Its blast
+radius (a subverted agent could embed it in a PR diff) is a named residual above,
+bounded by the draft-PR + human merge gate.
 
 ## ADR — why Docker, not bwrap/systemd (deviates from the original plan)
 

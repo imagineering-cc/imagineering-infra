@@ -108,20 +108,29 @@ export function boundedAuthority(env = process.env) {
  * Gate 4+5 — the cage substrate + agent command, read from env. A missing value
  * is a refusal (fail closed): without the proven images/network/proxy there is no
  * cage to spawn into, and without an agent command there is nothing to run.
- * PURE. @returns {{ok: true, image, network, proxyUrl, agentCmd} | {ok: false, reason}}
+ * PURE. @returns {{ok: true, image, network, proxyUrl, agentCmd, claudeToken} | {ok: false, reason}}
  */
 export function cageSubstrate(env = process.env) {
   const image = env.HEALER_CAGE_IMAGE;
   const network = env.HEALER_CAGE_NETWORK;
   const proxyUrl = env.HEALER_CAGE_PROXY_URL;
   const agentCmd = env.HEALER_CAGE_AGENT_CMD; // the codegen "monster"; operator-installed
+  // The inference credential the caged `claude -p` agent authenticates with. Unlike
+  // the GH token (gate 3) it is NOT bounded-distinct — it is the shared Max-plan
+  // OAuth token by nature, so there's nothing to make it distinct FROM; the gate
+  // here is only "present, fail-closed". It is part of the substrate because the
+  // agent literally cannot run inference without it. Forwarded into the cage
+  // KEY-ONLY (run-cage.mjs CAGE_CLAUDE_TOKEN → CLAUDE_CODE_OAUTH_TOKEN), so it
+  // never lands in argv / host `ps`.
+  const claudeToken = env.HEALER_CAGE_CLAUDE_TOKEN;
   const missing = [];
   if (!image) missing.push('HEALER_CAGE_IMAGE');
   if (!network) missing.push('HEALER_CAGE_NETWORK');
   if (!proxyUrl) missing.push('HEALER_CAGE_PROXY_URL');
   if (!agentCmd) missing.push('HEALER_CAGE_AGENT_CMD');
+  if (!claudeToken) missing.push('HEALER_CAGE_CLAUDE_TOKEN');
   if (missing.length) return { ok: false, reason: `cage substrate not provisioned: ${missing.join(', ')}` };
-  return { ok: true, image, network, proxyUrl, agentCmd };
+  return { ok: true, image, network, proxyUrl, agentCmd, claudeToken };
 }
 
 /** Scrub secrets out of (attacker-influenceable) log-derived text and length-cap
@@ -140,8 +149,9 @@ function safeContext(x, max) {
  * (d) the spawn routes through run-cage.mjs (not a raw `docker run`).
  *
  * run-cage.mjs forwards a BOUNDED allowlist into the container: CAGE_GH_TOKEN →
- * GH_TOKEN/GITHUB_TOKEN, every CAGE_AGENT_* var, and HOME=/work (the writable-HOME
- * residual cage/README.md assigns to the orchestrator). Nothing else crosses.
+ * GH_TOKEN/GITHUB_TOKEN, CAGE_CLAUDE_TOKEN → CLAUDE_CODE_OAUTH_TOKEN, every
+ * CAGE_AGENT_* var, and HOME=/work (the writable-HOME residual cage/README.md
+ * assigns to the orchestrator). Both secrets ride key-only. Nothing else crosses.
  */
 export function buildRunCageSpawn({ finding, repo, workdirHost, token, substrate, runCagePath = RUN_CAGE_PATH }) {
   const fp = findingFingerprint(finding);
@@ -154,6 +164,11 @@ export function buildRunCageSpawn({ finding, repo, workdirHost, token, substrate
     // The bounded repo-scoped token. run-cage.mjs maps this to GH_TOKEN/GITHUB_TOKEN
     // INSIDE the cage; the broad host token is never referenced here.
     CAGE_GH_TOKEN: token,
+    // The inference credential (shared Max-plan OAuth). run-cage.mjs maps this to
+    // CLAUDE_CODE_OAUTH_TOKEN inside the cage, key-only — so the caged `claude -p`
+    // can reach api.anthropic.com through the egress proxy. Provisioned, not bounded
+    // (it can't be repo-scoped); the cage + human merge-gate bound its blast radius.
+    CAGE_CLAUDE_TOKEN: substrate.claudeToken,
     // Finding context for the agent, scrubbed + capped (it is log-derived =
     // attacker-influenceable). run-cage forwards CAGE_AGENT_* into the cage.
     CAGE_AGENT_REPO: repo,

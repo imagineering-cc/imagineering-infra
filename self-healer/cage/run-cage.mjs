@@ -59,10 +59,20 @@ const networkId = resolveInternalNetwork(process.env.CAGE_NETWORK);
 //     reads it from the client env — it never lands in the argv / host `ps`
 //     (cage-match #114, Maxwell F1). cage.mjs bounds reachability; token scope
 //     bounds authority (cage/README.md "Credential scope").
+//   - CAGE_CLAUDE_TOKEN → CLAUDE_CODE_OAUTH_TOKEN, passed KEY-ONLY the SAME way:
+//     the inference credential the caged `claude -p` codegen agent authenticates
+//     with. It reaches api.anthropic.com THROUGH the egress proxy (the loopback
+//     claude-shim is unreachable from the --internal net AND tool-less by design),
+//     so the token must live inside the cage — but as a key-only `-e` so its value
+//     rides in the docker client env, never the argv / host `ps`. Forwarded ONLY
+//     when CAGE_CLAUDE_TOKEN is explicitly set, so an ambient CLAUDE_CODE_OAUTH_TOKEN
+//     in the operator's shell is NOT leaked into the cage (the escape probe's
+//     `claude-token-not-leaked` case proves this).
 //   - CAGE_AGENT_*   → value-carrying (non-secret task context: repo, finding
 //     signature/diagnosis/action, fingerprint), already scrubbed+capped.
 //   - HOME=/work     → the writable-HOME the real agent needs (the residual
-//     cage/README.md assigns to the orchestrator); only when a token is present.
+//     cage/README.md assigns to the orchestrator); set whenever EITHER token is
+//     present (both `gh`/`git` and `claude` write under $HOME).
 // NOTHING else crosses, and buildCageArgv appends the proxy routing LAST so none
 // of these can clobber egress (a clobbered HTTPS_PROXY would mean direct egress).
 function forwardedCageEnv() {
@@ -75,6 +85,15 @@ function forwardedCageEnv() {
     process.env.GH_TOKEN = tok;
     process.env.GITHUB_TOKEN = tok;
     passNames.push('GH_TOKEN', 'GITHUB_TOKEN');
+    setEnv.HOME = '/work';
+  }
+  const claudeTok = process.env.CAGE_CLAUDE_TOKEN;
+  if (claudeTok) {
+    // Same key-only discipline as the GH token: export the VALUE into our own env
+    // so the inherited docker child reads it from the client env, and pass only the
+    // NAME in the argv. `claude -p` writes ~/.claude, so it needs the writable HOME.
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = claudeTok;
+    passNames.push('CLAUDE_CODE_OAUTH_TOKEN');
     setEnv.HOME = '/work';
   }
   for (const k of Object.keys(process.env)) {

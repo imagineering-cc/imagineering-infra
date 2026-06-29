@@ -23,8 +23,11 @@ WORKDIR="$(mktemp -d /tmp/cage-workdir.XXXXXX)"
 # green-auto the orchestrator chowns the fresh clone to the cage uid instead.
 chmod 0777 "$WORKDIR"
 
-# Allowlist for the probe: github is the "allowed" host; example.com is "forbidden".
-ALLOW_HOSTS="api.github.com,.github.com"
+# Allowlist for the probe: github + the inference brain are the "allowed" hosts;
+# example.com is "forbidden". api.anthropic.com is the codegen agent's inference
+# endpoint (reached THROUGH the proxy with CLAUDE_CODE_OAUTH_TOKEN) — it must be
+# the SAME allowlist the real green-auto deploy uses (cage/README.md "Inference host").
+ALLOW_HOSTS="api.github.com,.github.com,api.anthropic.com"
 
 pass=0; fail=0
 ok()   { echo "  ✅ $1"; pass=$((pass+1)); }
@@ -200,6 +203,37 @@ if cage sh -c 'test -z "$GITHUB_TOKEN" && test -z "$GH_TOKEN"' >/dev/null 2>&1; 
   ok "token-not-leaked: no GitHub token in the cage when CAGE_GH_TOKEN is unset"
 else
   bad "token-not-leaked: a GitHub token leaked into the cage with CAGE_GH_TOKEN unset"
+fi
+
+# allow-inference: api.anthropic.com THROUGH the proxy must work (the codegen
+# agent's inference path). An unauthenticated request still returns a real HTTP
+# status (401/404/405) once the CONNECT tunnel opens — that non-000 code IS the
+# proof the proxy permitted the host. A proxy DENY would fail the tunnel → 000.
+inf_code="$(cage curl -sS --max-time 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/messages 2>/dev/null)"
+if printf '%s' "$inf_code" | grep -qE '^(2..|3..|4..)$'; then
+  ok "allow-inference: api.anthropic.com reachable via proxy (HTTP $inf_code through the tunnel)"
+else
+  bad "allow-inference: api.anthropic.com NOT reachable via proxy (code='$inf_code'; cage broken shut)"
+fi
+
+# claude-token-forward: run-cage.mjs must forward CAGE_CLAUDE_TOKEN into the cage
+# as CLAUDE_CODE_OAUTH_TOKEN — key-only (`-e CLAUDE_CODE_OAUTH_TOKEN`), so its
+# VALUE rides in the docker client env, never the `docker run` argv / host `ps`
+# (same discipline as the GH token, cage-match #114). Without it `claude -p` can't auth.
+if CAGE_CLAUDE_TOKEN='probe-claude-sentinel' cage sh -c 'test "$CLAUDE_CODE_OAUTH_TOKEN" = probe-claude-sentinel' >/dev/null 2>&1; then
+  ok "claude-token-forward: CAGE_CLAUDE_TOKEN reaches the cage as CLAUDE_CODE_OAUTH_TOKEN"
+else
+  bad "claude-token-forward: CAGE_CLAUDE_TOKEN NOT forwarded into the cage (codegen agent can't auth inference)"
+fi
+# claude-token-not-leaked: WITHOUT CAGE_CLAUDE_TOKEN, NO inference token must reach
+# the cage — even though the operator's OWN shell almost certainly has
+# CLAUDE_CODE_OAUTH_TOKEN exported (sourced from ~/.claude/.env). run-cage forwards
+# it ONLY via the explicit CAGE_CLAUDE_TOKEN indirection, never by ambient name, so
+# the shared Max token can't silently ride into a subverted agent. THE key test.
+if cage sh -c 'test -z "$CLAUDE_CODE_OAUTH_TOKEN"' >/dev/null 2>&1; then
+  ok "claude-token-not-leaked: no inference token in the cage when CAGE_CLAUDE_TOKEN is unset"
+else
+  bad "claude-token-not-leaked: CLAUDE_CODE_OAUTH_TOKEN leaked into the cage with CAGE_CLAUDE_TOKEN unset"
 fi
 
 echo
