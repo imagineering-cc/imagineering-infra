@@ -99,10 +99,12 @@ it's safe) — fix forward, never relax an escape gate to make a success case pa
 
 - **Writable `HOME` for the real agent.** ✅ *Resolved.* `--read-only` + only
   `/work`/`/tmp` writable would make a real `claude -p` (writes `~/.claude`) and
-  `git` (writes `$HOME`) fail. `run-cage.mjs` now forwards `HOME=/work` into the
-  cage whenever EITHER agent token (`CAGE_GH_TOKEN` / `CAGE_CLAUDE_TOKEN`) is
-  present, so the agent writes its state into the one writable reservoir (the
-  clone), never the read-only rootfs. The probe used `alpine sh`, which needs none.
+  `git` (writes `$HOME`) fail. Two layers: `run-cage.mjs` forwards `HOME=/work` into
+  the cage whenever either agent token is present (so `git`'s `$HOME` is writable);
+  AND `agent-entrypoint.mjs` then runs the `claude` subprocess with its OWN tmpfs
+  HOME (`/tmp/agent-home-*`), NOT `/work` — so `~/.claude` lands in tmpfs and can't
+  be swept into `git add -A` and shipped in the PR. The probe used `alpine sh`,
+  which needs neither.
 - **Same-subnet host bridge IP.** The probe proves the *default* bridge gateway
   (`172.17.0.1`) and `host.docker.internal` are unreachable, but does not yet
   probe the internal network's *own* in-subnet gateway IP. Docker binds no host
