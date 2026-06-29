@@ -17,6 +17,8 @@ import {
   cageSubstrate,
   buildRunCageSpawn,
   autoFixIfActionable,
+  actionForExit,
+  AUTO_ACTIONS,
   RUN_CAGE_PATH,
   CLONE_SCRIPT,
 } from '../src/auto.mjs';
@@ -113,6 +115,26 @@ test('cageSubstrate: ok when all provisioned (incl. inference token)', () => {
   assert.equal(r.ok, true);
   assert.equal(r.agentCmd, 'claude -p');
   assert.equal(r.claudeToken, 'sk-ant-oat-xyz');
+});
+
+// ── exit-code → outcome mapping (cage-match #121, Carnot) ────────────────────
+
+test('actionForExit: clean exit 0 → CAGED (a draft PR was opened)', () => {
+  const r = actionForExit(0, 'abc123def456789');
+  assert.equal(r.action, AUTO_ACTIONS.CAGED);
+  assert.match(r.detail, /abc123def456/);
+});
+
+test('actionForExit: NO_DIFF (exit 3) → NO_FIX, NOT FAILED (benign empty-diff is not failure telemetry)', () => {
+  const r = actionForExit(3, 'abc123def456789');
+  assert.equal(r.action, AUTO_ACTIONS.NO_FIX);
+  assert.notEqual(r.action, AUTO_ACTIONS.FAILED);
+});
+
+test('actionForExit: any other non-zero exit → FAILED', () => {
+  for (const code of [1, 2, 4, 5, 6, 7, 'signal:SIGKILL']) {
+    assert.equal(actionForExit(code, 'fp').action, AUTO_ACTIONS.FAILED, `exit ${code} should be FAILED`);
+  }
 });
 
 // ── Pure spawn shape ─────────────────────────────────────────────────────────

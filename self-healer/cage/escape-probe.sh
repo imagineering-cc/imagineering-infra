@@ -199,10 +199,15 @@ else
 fi
 # token-not-leaked: WITHOUT CAGE_GH_TOKEN, no GitHub token must appear in the cage
 # env (the probe's normal cases must never carry a stray credential).
-if cage sh -c 'test -z "$GITHUB_TOKEN" && test -z "$GH_TOKEN"' >/dev/null 2>&1; then
-  ok "token-not-leaked: no GitHub token in the cage when CAGE_GH_TOKEN is unset"
+# Set an AMBIENT GH token in the probe shell (NOT CAGE_GH_TOKEN) so the test is not
+# vacuous: it proves run-cage forwards the token ONLY via the explicit CAGE_GH_TOKEN
+# indirection, never by ambient name. Without the sentinel the assertion passes even
+# if forwarding were broken (cage-match #121, Carnot MEDIUM).
+if GH_TOKEN='ambient-gh-sentinel' GITHUB_TOKEN='ambient-gh-sentinel' \
+   cage sh -c 'test -z "$GITHUB_TOKEN" && test -z "$GH_TOKEN"' >/dev/null 2>&1; then
+  ok "token-not-leaked: ambient GitHub token does NOT ride into the cage (only CAGE_GH_TOKEN forwards)"
 else
-  bad "token-not-leaked: a GitHub token leaked into the cage with CAGE_GH_TOKEN unset"
+  bad "token-not-leaked: an ambient GitHub token leaked into the cage with CAGE_GH_TOKEN unset"
 fi
 
 # allow-inference: api.anthropic.com THROUGH the proxy must work (the codegen
@@ -230,10 +235,15 @@ fi
 # CLAUDE_CODE_OAUTH_TOKEN exported (sourced from ~/.claude/.env). run-cage forwards
 # it ONLY via the explicit CAGE_CLAUDE_TOKEN indirection, never by ambient name, so
 # the shared Max token can't silently ride into a subverted agent. THE key test.
-if cage sh -c 'test -z "$CLAUDE_CODE_OAUTH_TOKEN"' >/dev/null 2>&1; then
-  ok "claude-token-not-leaked: no inference token in the cage when CAGE_CLAUDE_TOKEN is unset"
+# Non-vacuous: set the ambient token the operator's real shell would have, with
+# CAGE_CLAUDE_TOKEN UNSET, and prove it does NOT cross into the cage (cage-match
+# #121, Carnot MEDIUM — the prior version never set the ambient condition it claimed
+# to disprove, so it passed trivially on a shell without the token).
+if CLAUDE_CODE_OAUTH_TOKEN='ambient-claude-sentinel' \
+   cage sh -c 'test -z "$CLAUDE_CODE_OAUTH_TOKEN"' >/dev/null 2>&1; then
+  ok "claude-token-not-leaked: ambient CLAUDE_CODE_OAUTH_TOKEN does NOT ride into the cage (only CAGE_CLAUDE_TOKEN forwards)"
 else
-  bad "claude-token-not-leaked: CLAUDE_CODE_OAUTH_TOKEN leaked into the cage with CAGE_CLAUDE_TOKEN unset"
+  bad "claude-token-not-leaked: an ambient CLAUDE_CODE_OAUTH_TOKEN leaked into the cage with CAGE_CLAUDE_TOKEN unset"
 fi
 
 echo

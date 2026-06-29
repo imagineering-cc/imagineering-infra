@@ -40,6 +40,7 @@ export const EXIT = Object.freeze({
   AGENT_FAILED: 4, // `claude -p` exited non-zero
   GIT_FAILED: 5, // branch/commit/push failed
   PR_FAILED: 6, // `gh pr create` failed
+  SECRET_LEAK: 7, // a credential value appeared in the agent's diff — refused to commit (cage-match #121, Carnot)
 });
 
 /** The env vars the cage MUST have forwarded (see header). Returns the missing
@@ -143,15 +144,38 @@ const GIT_BOT_EMAIL = 'self-healer@imagineering.cc';
 
 /** A git credential helper that supplies the repo-scoped token WITHOUT writing it
  * to .git/config. It runs via `sh -c` (execs /bin/sh, NOT a file on the noexec
- * /tmp tmpfs), reading the token from the GH_TOKEN env at call time. The leading
- * empty `credential.helper=` clears any inherited helper so only this one answers. */
+ * /tmp tmpfs), reading the token from the GH_TOKEN env at call time. Passed inline
+ * via `-c` at push time (NOT persisted) so it OUTRANKS any helper a subverted agent
+ * planted in /work/.git/config; the leading empty `credential.helper=` clears the list. */
 const CRED_HELPER = '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f';
 
+/** Hardening flags prepended to EVERY git call, inline via `-c` so they OUTRANK any
+ * file config the (untrusted) agent may have written into /work/.git/config:
+ *   safe.directory=/work — the host (uid 1002, non-root) can only `chmod 0777` the
+ *     fresh clone, never `chown` it to the cage uid (1000), so /work is alien-owned
+ *     and git would otherwise refuse with "detected dubious ownership" on the FIRST
+ *     command, breaking every run (cage-match #121, Maxwell).
+ *   core.hooksPath=/dev/null — neutralise any .git/hooks/* the agent planted, so our
+ *     own commit/push can't be hijacked into executing agent code (cage-match #121,
+ *     Carnot HIGH). Command-line `-c` beats a planted file config. */
+const GIT_HARDEN = ['-c', 'safe.directory=/work', '-c', 'core.hooksPath=/dev/null'];
+
 function git(args, opts = {}) {
-  return execFileSync('git', args, { cwd: WORKDIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...opts });
+  return execFileSync('git', [...GIT_HARDEN, ...args], { cwd: WORKDIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...opts });
 }
 
 function log(msg) { process.stderr.write(`[agent] ${msg}\n`); }
+
+/** Hard-fail if a secret VALUE appears in the staged diff the agent just produced.
+ * The OS cage bounds reachability to two hosts, but GitHub egress IS the publish
+ * channel — a subverted agent embedding a token in its diff would exfil it through
+ * the very PR we're about to push. This enforces the "token-in-PR" residual the
+ * README named (cage-match #121, Carnot HIGH). Scans for the exact values (staged,
+ * so new untracked files the agent created are covered too), not a regex. */
+function stagedDiffContainsSecret(secrets) {
+  const blob = git(['diff', '--cached']);
+  return secrets.some((s) => s && blob.includes(s));
+}
 
 function main() {
   const env = process.env;
@@ -164,21 +188,30 @@ function main() {
   }
   // The clone may set GH_TOKEN or GITHUB_TOKEN; normalise so the helper + gh agree.
   if (!env.GH_TOKEN && env.GITHUB_TOKEN) env.GH_TOKEN = env.GITHUB_TOKEN;
+  // Capture the secret VALUES up front for the post-codegen diff scan — they must
+  // never appear in the agent's output even after we strip them from the env below.
+  const ghToken = env.GH_TOKEN;
+  const claudeToken = env.CLAUDE_CODE_OAUTH_TOKEN;
   const ctx = contextFromEnv(env);
   log(`finding ${ctx.fp} → ${ctx.repo} (${ctx.container})`);
 
-  // 2. git identity + token push-auth (helper, never on disk).
+  // 2. git GLOBAL config in a tmpfs file — NOT under HOME=/work, where `git add -A`
+  //    would commit it. Carries the bot identity + safe.directory; GIT_HARDEN re-
+  //    asserts the critical flags inline on every call regardless of file config.
+  const gitCfgDir = mkdtempSync('/tmp/gitcfg-');
+  env.GIT_CONFIG_GLOBAL = `${gitCfgDir}/config`;
+  env.GIT_CONFIG_SYSTEM = '/dev/null'; // ignore any image/system git config
   try {
-    git(['config', 'user.name', GIT_BOT_NAME]);
-    git(['config', 'user.email', GIT_BOT_EMAIL]);
-    git(['config', 'credential.helper', '']); // clear inherited
-    git(['config', '--add', 'credential.helper', CRED_HELPER]);
+    git(['config', '--global', 'user.name', GIT_BOT_NAME]);
+    git(['config', '--global', 'user.email', GIT_BOT_EMAIL]);
+    git(['config', '--global', '--add', 'safe.directory', WORKDIR]);
   } catch (e) {
-    log(`GIT_FAILED: identity/auth setup: ${e.message}`);
+    log(`GIT_FAILED: git config: ${e.message}`);
     return EXIT.GIT_FAILED;
   }
 
-  // 3. deterministic branch.
+  // 3. deterministic branch from the current HEAD (the fix is against the freshly
+  //    cloned default branch, not any prior PR branch).
   const branch = branchName(ctx.fp);
   try {
     git(['checkout', '-B', branch]);
@@ -187,22 +220,22 @@ function main() {
     return EXIT.GIT_FAILED;
   }
 
-  // 4. run the caged codegen agent. The cage IS the boundary, so the agent runs
-  //    with tools and skipped permission prompts; egress is allowlist-bounded and
-  //    the token is repo-scoped. Inference auth = CLAUDE_CODE_OAUTH_TOKEN via the
-  //    egress proxy to api.anthropic.com (the Max-plan zero-cost path).
+  // 4. run the caged codegen agent with a SANITISED env: NO GitHub credentials
+  //    (cage-match #121, Carnot HIGH — the agent only edits files; leaving GH_TOKEN
+  //    in its env would let a subverted agent `git push` itself). It keeps
+  //    CLAUDE_CODE_OAUTH_TOKEN (inference) + a tmpfs HOME so ~/.claude can't fall into
+  //    `git add -A`. The cage is the boundary; this just shrinks what the agent holds.
   const prompt = buildPrompt(ctx);
-  // Give claude its OWN HOME off the clone. The cage sets HOME=/work, but claude
-  // writes ~/.claude — inside the clone that would land in `git add -A` and ship the
-  // agent's config in the PR. A throwaway tmpfs HOME (/tmp is writable, noexec — fine
-  // for json config, claude doesn't exec from HOME in -p mode) keeps the diff clean.
   const agentHome = mkdtempSync('/tmp/agent-home-');
-  log('running claude -p (caged, tools on)…');
+  const claudeEnv = { ...env, HOME: agentHome };
+  delete claudeEnv.GH_TOKEN;
+  delete claudeEnv.GITHUB_TOKEN;
+  log('running claude -p (caged, tools on, no git creds)…');
   const claude = spawnSync('claude', [
     '-p', prompt,
     '--output-format', 'text',
     '--dangerously-skip-permissions', // SAFE: the OS cage is the boundary, not the permission prompt
-  ], { cwd: WORKDIR, stdio: ['ignore', 'inherit', 'inherit'], env: { ...env, HOME: agentHome } });
+  ], { cwd: WORKDIR, stdio: ['ignore', 'inherit', 'inherit'], env: claudeEnv });
   if (claude.status !== 0) {
     log(`AGENT_FAILED: claude exited ${claude.status ?? `signal:${claude.signal}`}`);
     return EXIT.AGENT_FAILED;
@@ -215,12 +248,32 @@ function main() {
     return EXIT.NO_DIFF;
   }
 
-  // 6. commit + push + DRAFT PR.
-  const fpShort = String(ctx.fp).slice(0, 12);
+  // 6. stage everything (incl. new files), then the SECRET-SCAN GATE: refuse to
+  //    commit if the agent embedded either token value (cage-match #121, Carnot HIGH).
   try {
     git(['add', '-A']);
-    git(['commit', '-m', `fix(self-healer): ${ctx.signature || 'auto-remediation'} (fp ${fpShort})\n\nAuto-drafted by green-auto from a prod log diagnosis. UNVERIFIED — see PR body.`]);
-    git(['push', '--force-with-lease', '-u', 'origin', branch]);
+  } catch (e) {
+    log(`GIT_FAILED: stage: ${e.message}`);
+    return EXIT.GIT_FAILED;
+  }
+  if (stagedDiffContainsSecret([ghToken, claudeToken])) {
+    log('SECRET_LEAK: a credential value appears in the agent diff — refusing to commit/push');
+    return EXIT.SECRET_LEAK;
+  }
+  // The inference token is no longer needed; drop it so the git/gh subprocesses below
+  // never carry it (defence in depth atop the scan).
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
+
+  // 7. commit + push + DRAFT PR. Credential helper passed inline via -c (NOT written
+  //    to .git/config) so it outranks anything the agent planted; --no-verify +
+  //    core.hooksPath=/dev/null (GIT_HARDEN) ensure no agent hook runs. Plain --force:
+  //    self-healer/fix-<fp> is a bot-exclusive branch (the orchestrator's fp-lock
+  //    serialises same-box runs), and --force-with-lease has no remote-tracking ref
+  //    to lease against in a fresh shallow clone, so a re-run would reject (#121, Carnot).
+  const fpShort = String(ctx.fp).slice(0, 12);
+  try {
+    git(['commit', '--no-verify', '-m', `fix(self-healer): ${ctx.signature || 'auto-remediation'} (fp ${fpShort})\n\nAuto-drafted by green-auto from a prod log diagnosis. UNVERIFIED — see PR body.`]);
+    git(['-c', 'credential.helper=', '-c', `credential.helper=${CRED_HELPER}`, 'push', '--no-verify', '--force', '-u', 'origin', branch]);
   } catch (e) {
     log(`GIT_FAILED: commit/push: ${e.message}`);
     return EXIT.GIT_FAILED;

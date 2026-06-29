@@ -64,9 +64,29 @@ export const AUTO_ACTIONS = Object.freeze({
   REFUSED: 'refused', // a global gate (on-box / authority / substrate) was unmet — spawned nothing
   SKIPPED: 'skipped', // this finding has no known source repo
   DEDUPED: 'deduped', // a concurrent run owns the finding's lock
-  CAGED: 'caged', // the cage ran and exited clean
-  FAILED: 'failed', // clone/spawn error, lock error, or non-zero cage exit
+  CAGED: 'caged', // the cage ran and exited clean (a draft PR was opened)
+  NO_FIX: 'no_fix', // the agent ran but made no change (entrypoint EXIT.NO_DIFF) — benign, NOT a failure
+  FAILED: 'failed', // clone/spawn error, lock error, or other non-zero cage exit
 });
+
+/** The agent entrypoint's EXIT.NO_DIFF — a non-zero exit that is nonetheless a
+ * BENIGN "the agent confidently made no change" (cage-match #121, Carnot). Mapping
+ * it to FAILED would mislabel a safe outcome as failure telemetry and re-attempt the
+ * same finding daily. The entrypoint is operator-installed so we can't import its
+ * EXIT object; this magic number IS the cross-process contract (agent-entrypoint.mjs). */
+const AGENT_EXIT_NO_DIFF = 3;
+
+/** PURE: map a finished cage's exit code to a per-finding outcome. Three classes:
+ * 0 = a draft PR was opened (CAGED); NO_DIFF = the agent confidently changed nothing
+ * (NO_FIX — benign, must NOT read as failure telemetry, cage-match #121, Carnot);
+ * anything else = FAILED. Exported so the exit→action contract is asserted in CI
+ * without a Docker daemon. @returns {{action: string, detail: string}} */
+export function actionForExit(exitCode, fp) {
+  const short = String(fp).slice(0, 12);
+  if (exitCode === 0) return { action: AUTO_ACTIONS.CAGED, detail: `cage exited clean (fp ${short}…)` };
+  if (exitCode === AGENT_EXIT_NO_DIFF) return { action: AUTO_ACTIONS.NO_FIX, detail: `agent made no change (fp ${short}…)` };
+  return { action: AUTO_ACTIONS.FAILED, detail: `cage exited ${exitCode}` };
+}
 
 /** EVERY broad host token currently in the env (the healer's own GH-API creds,
  * any of the three names draft.mjs accepts). The bound green-auto token must
@@ -337,10 +357,11 @@ export async function autoFixIfActionable(verdict, env = process.env) {
       workdirHost = await prepareWorkdir(repo, auth.token);
       const spawnSpec = buildRunCageSpawn({ finding: f, repo, workdirHost, token: auth.token, substrate: sub });
       const exitCode = await spawnCage(spawnSpec);
+      const { action, detail } = actionForExit(exitCode, fp);
       outcomes.push({
         container: f.container,
-        action: exitCode === 0 ? AUTO_ACTIONS.CAGED : AUTO_ACTIONS.FAILED,
-        detail: exitCode === 0 ? `cage exited clean (fp ${fp.slice(0, 12)}…)` : `cage exited ${exitCode}`,
+        action,
+        detail,
         workdir: workdirHost,
         exitCode,
       });

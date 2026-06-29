@@ -116,13 +116,15 @@ it's safe) — fix forward, never relax an escape gate to make a success case pa
   SSRF-amplifier / surprisingly-CDN-fronted host. The resolved-IP guard blocks
   *internal* targets but not a *public* open-proxy. (Anthropic's API host is a
   fixed, non-redirecting JSON endpoint, so this is low-risk but unenforced.)
-- **Inference token exfil via the PR.** The cage bounds the agent's *reachability*
-  to two hosts; it does NOT stop a fully-subverted agent from writing the
-  `CLAUDE_CODE_OAUTH_TOKEN` it holds *into its own PR diff* (the GH token is
-  repo-scoped, so it can only push to the one target repo — but a secret in a draft
-  PR is still a leak). Bounded by: the PR is a DRAFT, cage-match + human review gate
-  it before merge, and the token is the rotatable shared Max token. *Named, not
-  enforced* — a future secret-scan of the agent's diff before push would close it.
+- **Token exfil via the PR diff.** ✅ *Now enforced* (cage-match #121, Carnot HIGH).
+  The cage bounds *reachability* to two hosts, but GitHub egress IS the publish
+  channel, so a subverted agent could write a token into its own diff. Three layers
+  now stop that: (1) the codegen `claude` runs with **no GitHub credentials in its
+  env** (it only edits files — it can't `git push` itself); (2) `agent-entrypoint.mjs`
+  **scans the staged diff for the exact token values and hard-fails** (`EXIT.SECRET_LEAK`)
+  before any commit/push; (3) the inference token is dropped from the env before the
+  git/gh phase. Residual (named): the scan matches *exact* values, not arbitrary
+  re-encodings, and the draft-PR + human review remain the backstop.
 
 ## Credential scope (boundary, partly outside the OS cage)
 
