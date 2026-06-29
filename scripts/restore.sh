@@ -2,7 +2,7 @@
 # Restore script for all services
 # Restores from GitHub backup repo (imagineering-cc/imagineering-backups)
 # Usage: ./restore.sh <service>
-#   service: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity
+#   service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity
 #
 # Note: continuwuity requires the age private key path in $AGE_IDENTITY_FILE
 # (default: ~/.config/sops/age/keys.txt — same file SOPS uses; age will try
@@ -30,7 +30,7 @@ AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/
 
 if [ -z "$SERVICE" ]; then
   echo "Usage: $0 <service>"
-  echo "  service: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity"
+  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
   echo ""
   echo "Examples:"
   echo "  $0 kanbn         # Restore latest from GitHub backup"
@@ -199,6 +199,89 @@ restore_claudius() {
   log "Claudius restore complete!"
 }
 
+# Restore the aiko-chat-gateway SQLite store from the latest .sql dump in the
+# backup repo. Mirrors the matrix-bridge sqlite restore: stop the container
+# (never replay against a live DB), replace the DB from the dump inside the
+# sqlite-dumper image (rw mount), restart. The dump carries the current schema
+# (email col, nullable password_hash, social_identities), so the gateway's boot
+# schema guard passes after restore. aiko_chat_gateway#4.
+restore_aiko_gateway() {
+  log "Restoring aiko-chat-gateway..."
+
+  fetch_backups
+
+  local sql_file="$BACKUP_CLONE_DIR/aiko-gateway.sql"
+  # Validate the dump BEFORE touching anything: present, non-empty, and complete
+  # (a COMPLETE sqlite .dump ends with COMMIT;). The gateway DB is the SOLE copy
+  # of auth+messages+ACL, so a bad dump must never reach the destructive path.
+  if [ ! -s "$sql_file" ]; then
+    error "No (non-empty) aiko-gateway.sql in backup repo"; cleanup_backups; exit 1
+  fi
+  # End-anchored completeness check (see backup.sh): the LAST non-blank line of a
+  # complete sqlite .dump is exactly `COMMIT;`. A whole-file grep could be fooled
+  # by `COMMIT;` embedded in multiline data, accepting a truncated dump.
+  if [ "$(grep -ve '^[[:space:]]*$' "$sql_file" | tail -n1)" != "COMMIT;" ]; then
+    error "aiko-gateway.sql looks truncated/invalid (last line is not COMMIT;)"; cleanup_backups; exit 1
+  fi
+
+  # Irreversible: replacing the sole auth+message store. Require typed consent.
+  echo "WARNING: this REPLACES the gateway's SOLE database (all accounts + messages + ACL)."
+  echo "  dump: $sql_file ($(wc -l < "$sql_file") lines, $(du -h "$sql_file" | cut -f1))"
+  read -r -p "Type 'restore aiko-gateway' to proceed: " confirm
+  if [ "$confirm" != "restore aiko-gateway" ]; then
+    error "Aborted (no confirmation)"; cleanup_backups; exit 1
+  fi
+
+  log "Stopping gateway..."
+  cd ~/apps/aiko-chat-gateway
+  docker compose stop
+
+  # Build + validate the candidate in a TEMP file, and only swap it in on
+  # success — the live aiko.db is untouched until a valid replacement exists.
+  # The old DB is kept as a timestamped rescue copy inside the volume.
+  local rescue
+  rescue="aiko.db.rescue-$(date +%Y%m%d-%H%M%S)"
+  log "Building + validating candidate DB (live DB untouched until it passes)..."
+  if ! docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c '
+        set -e
+        rm -f /data/aiko.db.restore /data/aiko.db.restore-wal /data/aiko.db.restore-shm
+        sqlite3 /data/aiko.db.restore        # replay dump from stdin
+        integ=$(sqlite3 /data/aiko.db.restore "PRAGMA integrity_check;")
+        [ "$integ" = "ok" ] || { echo "integrity_check failed: $integ" >&2; exit 1; }
+        sqlite3 /data/aiko.db.restore ".tables" | grep -qw users || { echo "no users table in restored DB" >&2; exit 1; }
+        rescue="'"$rescue"'"
+        # 1. Rescue the COMPLETE old state (db + any WAL/SHM) by full file copy —
+        #    no checkpoint dependency, so the rescue is faithful even if the old
+        #    DB is too corrupt to checkpoint. Every copy is FATAL under set -e
+        #    (the `if` guards make ABSENCE non-fatal without masking cp failure):
+        #    we never clobber the sole DB unless a complete copy exists first.
+        if [ -f /data/aiko.db ]; then
+          cp -p /data/aiko.db "/data/$rescue"
+          if [ -f /data/aiko.db-wal ]; then cp -p /data/aiko.db-wal "/data/$rescue-wal"; fi
+          if [ -f /data/aiko.db-shm ]; then cp -p /data/aiko.db-shm "/data/$rescue-shm"; fi
+        fi
+        # 2. Remove the old sidecars BEFORE installing the new DB (they are now
+        #    rescued). Ordering matters: a fresh-from-.dump DB must never sit
+        #    beside a stale, salt-mismatched WAL (SQLite corruption). Doing this
+        #    before the install means there is never a new-db + stale-wal window.
+        rm -f /data/aiko.db-wal /data/aiko.db-shm
+        # 3. Atomic install LAST: a single rename, always old-or-new, never
+        #    neither. If it fails, the live aiko.db is still the old one.
+        mv -f /data/aiko.db.restore /data/aiko.db
+      ' < "$sql_file"; then
+    error "aiko-gateway restore FAILED. The candidate was rejected before the final install in almost all cases, so the live aiko.db is the original; a complete rescue copy (aiko.db.rescue-*) is also in the volume. Inspect the volume before retrying. Restarting on the current DB."
+    docker compose up -d
+    cleanup_backups
+    exit 1
+  fi
+
+  log "Restored OK (previous DB kept in the volume as $rescue). Restarting gateway..."
+  docker compose up -d
+
+  cleanup_backups
+  log "aiko-gateway restore complete!"
+}
+
 # Restore matrix bridges + relay-bot SQLite DBs from latest SQL dumps in the
 # backup repo. Each .sql file is replayed against a fresh SQLite DB inside
 # the bridge's volume. Bridges must be stopped before the replay (writing
@@ -351,6 +434,9 @@ case $SERVICE in
   claudius)
     restore_claudius
     ;;
+  aiko-gateway)
+    restore_aiko_gateway
+    ;;
   matrix)
     restore_matrix
     ;;
@@ -359,7 +445,7 @@ case $SERVICE in
     ;;
   *)
     error "Unknown service: $SERVICE"
-    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, matrix, continuwuity"
+    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
     exit 1
     ;;
 esac

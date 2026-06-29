@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified backup script for all services
 # Dumps databases/data, pushes to GitHub (imagineering-cc/imagineering-backups)
-# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|matrix|continuwuity]
+# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity]
 #
 # NOTE: downstream-server's DB backup moved to the downstream repo
 # (nickmeinhold/downstream deploy/oci/scripts/backup-downstream.sh, cron
@@ -185,6 +185,49 @@ backup_matrix() {
     return 1
   fi
   log "Matrix backup complete"
+}
+
+# aiko-chat-gateway: the gateway's local SQLite store is the SOLE copy of message
+# history + auth credentials + the ACL/membership overlay. Per the #1281
+# HyperSpace-source-of-truth redesign, HyperSpace holds only channel/user
+# EXISTENCE; everything else lives in this one file on the named volume. A
+# `docker volume rm` or host disk loss would vaporize every account with no
+# second copy (aiko_chat_gateway#4). The gateway image ships no sqlite3, so —
+# like the matrix bridges — mount the volume read-only into sqlite-dumper and
+# `.dump` to text SQL (git-diffable). Online-safe: `.dump` reads a consistent
+# snapshot; the read-only mount can't perturb the live DB.
+backup_aiko_gateway() {
+  log "Backing up aiko-chat-gateway..."
+
+  local tmp="$BACKUP_DIR/aiko-gateway-$DATE.sql"
+  local err="$BACKUP_DIR/aiko-gateway-$DATE.err"
+  local out="$BACKUP_DIR/aiko-gateway-$DATE.sql.gz"
+
+  # Dump to a PLAIN .sql first (no pipe) so sqlite3's REAL exit is seen — piping
+  # to gzip would mask it behind gzip's status (and a gzip of empty input is
+  # still a non-empty container, so an `-s` size check on the .gz lies). Capture
+  # stderr for the error message (a WAL-locked read fails loudly, not silently).
+  if ! docker run --rm -v "aiko-chat-gateway_aiko_gateway_data:/data:ro" sqlite-dumper:latest \
+       sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump > "$tmp" 2>"$err"; then
+    error "aiko-gateway sqlite3 .dump failed: $(tr '\n' ' ' < "$err")"
+    rm -f "$tmp" "$err"
+    return 1
+  fi
+  # A COMPLETE .dump's LAST non-blank line is exactly `COMMIT;`. Check the tail
+  # (end-anchored), not `grep '^COMMIT;'` — application data can contain a
+  # multiline string literal whose embedded line starts with `COMMIT;` and would
+  # fool a whole-file grep into accepting a truncated dump. An empty/truncated
+  # backup is worse than none here: restore would replay it over the sole live DB.
+  local lastline
+  lastline=$(grep -ve '^[[:space:]]*$' "$tmp" | tail -n1)
+  if [ "$lastline" != "COMMIT;" ]; then
+    error "aiko-gateway dump invalid (last line '$lastline', not COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
+    rm -f "$tmp" "$err"
+    return 1
+  fi
+  rm -f "$err"
+  gzip -f "$tmp"   # -> $out (aiko-gateway-$DATE.sql.gz)
+  log "aiko-gateway backup complete: $(basename "$out") ($(du -h "$out" | cut -f1))"
 }
 
 # Triggers Continuwuity's online RocksDB checkpoint via the admin API
@@ -457,7 +500,7 @@ cleanup_old_backups() {
 case $SERVICE in
   all)
     SUCCEEDED=()
-    for svc in kanbn outline radicale pm-bot claudius; do
+    for svc in kanbn outline radicale pm-bot claudius aiko-gateway; do
       if "backup_${svc//-/_}"; then
         SUCCEEDED+=("$svc")
       else
@@ -509,6 +552,9 @@ case $SERVICE in
   claudius)
     backup_claudius && backup_to_github claudius || FAILED_SERVICES+=(claudius)
     ;;
+  aiko-gateway)
+    backup_aiko_gateway && backup_to_github aiko-gateway || FAILED_SERVICES+=(aiko-gateway)
+    ;;
   matrix)
     if backup_matrix; then
       backup_to_github matrix-discord matrix-signal matrix-telegram \
@@ -525,7 +571,7 @@ case $SERVICE in
     cleanup_old_backups
     ;;
   *)
-    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|matrix|continuwuity|cleanup]"
+    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity|cleanup]"
     exit 1
     ;;
 esac
