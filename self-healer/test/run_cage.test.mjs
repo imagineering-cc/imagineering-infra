@@ -22,6 +22,20 @@ test('forwardedCageEnv: does NOT mutate the passed env (no stale token residue)'
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 });
 
+test('forwardedCageEnv: the PRODUCTION call shape (default process.env) leaves process.env unmutated', () => {
+  // Carnot's sharpness nit: pin the actual call site — forwardedCageEnv() with no arg
+  // reads process.env, and must not write the secret back onto it (the stale-token leak).
+  const saved = process.env.CAGE_CLAUDE_TOKEN;
+  process.env.CAGE_CLAUDE_TOKEN = 'sk-ant-oat-prod-shape';
+  try {
+    const { passValues } = forwardedCageEnv(); // default process.env
+    assert.equal(passValues.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat-prod-shape'); // value still routed
+    assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined); // but NOT written onto process.env
+  } finally {
+    if (saved === undefined) delete process.env.CAGE_CLAUDE_TOKEN; else process.env.CAGE_CLAUDE_TOKEN = saved;
+  }
+});
+
 test('forwardedCageEnv: GH token rides key-only (passValues + passNames), never value-carrying setEnv', () => {
   const { setEnv, passNames, passValues } = forwardedCageEnv({ CAGE_GH_TOKEN: 'gh-xyz' });
   assert.deepEqual(passValues, { GH_TOKEN: 'gh-xyz', GITHUB_TOKEN: 'gh-xyz' });
