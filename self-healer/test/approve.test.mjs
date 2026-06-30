@@ -119,6 +119,19 @@ test('mergeGateOk: a FAILING or still-running check blocks the merge (no --admin
   assert.match(mergeGateOk({ ...GREEN, statusCheckRollup: [{ name: 'ci', status: 'IN_PROGRESS', conclusion: null }] }).reason, /not passing/);
 });
 
+test('mergeGateOk: trustedReviewers (opt-in) requires an APPROVE from a trusted login', () => {
+  const withReviews = { ...GREEN, reviews: [{ state: 'APPROVED', author: { login: 'nick' } }] };
+  // unset → named tradeoff, passes on reviewDecision alone
+  assert.deepEqual(mergeGateOk(withReviews), { ok: true });
+  // configured + a trusted approver present → ok
+  assert.deepEqual(mergeGateOk(withReviews, { trustedReviewers: ['nick', 'maxwell'] }), { ok: true });
+  // configured but the approve came from an UNtrusted login → refused
+  const byStranger = { ...GREEN, reviews: [{ state: 'APPROVED', author: { login: 'randobot' } }] };
+  assert.match(mergeGateOk(byStranger, { trustedReviewers: ['nick'] }).reason, /trusted reviewer/);
+  // configured but NO approving review object present → refused
+  assert.match(mergeGateOk(GREEN, { trustedReviewers: ['nick'] }).reason, /trusted reviewer/);
+});
+
 test('failingCheck: passes SUCCESS/NEUTRAL/SKIPPED + StatusContext SUCCESS; absent → null', () => {
   assert.equal(failingCheck([]), null);
   assert.equal(failingCheck(undefined), null);

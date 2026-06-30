@@ -30,17 +30,21 @@ const TELEGRAM_MAX = 4096; // Telegram's hard message-length limit.
 // Known secret PREFIXES — the first line of defence (cheap, precise). NOT the
 // only line: the generic rules below catch the shapes a prefix list can't.
 const KNOWN_SECRET_PATTERNS = [
-  [/\bsk-ant-[a-zA-Z0-9_-]{6,}/g, '<redacted:anthropic-key>'],
-  [/\b(?:github_pat|gh[posru])_[A-Za-z0-9_]{16,}/g, '<redacted:github-token>'],
-  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '<redacted:slack-token>'],
-  [/\bAIza[A-Za-z0-9_-]{20,}/g, '<redacted:google-key>'],
-  [/\bsk-(?:proj-)?[A-Za-z0-9]{20,}/g, '<redacted:openai-key>'],
-  [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, '<redacted:stripe-key>'],
-  [/\bxkeysib-[A-Za-z0-9]{16,}/g, '<redacted:brevo-key>'],
-  [/\bAKIA[0-9A-Z]{16}\b/g, '<redacted:aws-key-id>'],
-  [/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/g, '<redacted:bearer>'],
-  [/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/g, '<redacted:jwt>'],
-  [/-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, '<redacted:private-key>'],
+  // Markers use SQUARE brackets, not angle, so they are HTML-safe: scrubbing may run
+  // AFTER a field is HTML-escaped (sendNotify scrubs the final message), and an
+  // angle-bracket marker would reintroduce raw <…> and break Telegram HTML parse_mode
+  // (cage-match #122, Carnot).
+  [/\bsk-ant-[a-zA-Z0-9_-]{6,}/g, '[redacted:anthropic-key]'],
+  [/\b(?:github_pat|gh[posru])_[A-Za-z0-9_]{16,}/g, '[redacted:github-token]'],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '[redacted:slack-token]'],
+  [/\bAIza[A-Za-z0-9_-]{20,}/g, '[redacted:google-key]'],
+  [/\bsk-(?:proj-)?[A-Za-z0-9]{20,}/g, '[redacted:openai-key]'],
+  [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, '[redacted:stripe-key]'],
+  [/\bxkeysib-[A-Za-z0-9]{16,}/g, '[redacted:brevo-key]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted:aws-key-id]'],
+  [/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/g, '[redacted:bearer]'],
+  [/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/g, '[redacted:jwt]'],
+  [/-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, '[redacted:private-key]'],
 ];
 
 /**
@@ -65,10 +69,10 @@ export function scrubSecrets(text) {
   // 2. sensitive key=value / key: value (preserve the key name, redact value).
   out = out.replace(
     /\b(pass(?:word|wd)?|secret|api[_-]?key|apikey|client[_-]?secret|access[_-]?key|auth(?:orization)?|token)\b(\s*[=:]\s*)('?"?)[^\s'"]+/gi,
-    (_m, key, sep) => `${key}${sep}<redacted>`,
+    (_m, key, sep) => `${key}${sep}[redacted]`,
   );
   // 3. high-entropy catch-all: any 32+ char run of credential-alphabet chars.
-  out = out.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g, '<redacted:high-entropy>');
+  out = out.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g, '[redacted:high-entropy]');
   return out;
 }
 

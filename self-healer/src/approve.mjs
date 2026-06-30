@@ -83,10 +83,14 @@ export function approvalDecision(update, cfg = {}) {
  * the `cage-matched` label (the signal that the adversarial review passed). A draft
  * is allowed (the poller marks it ready first) — draftness is not a block, an
  * un-reviewed or un-cage-matched PR is.
- * @param {{state?: string, mergeable?: string, reviewDecision?: string, labels?: Array<{name?:string}|string>, statusCheckRollup?: Array<object>}} pr
+ * @param {{state?: string, mergeable?: string, reviewDecision?: string, labels?: Array<{name?:string}|string>, statusCheckRollup?: Array<object>, reviews?: Array<{state?: string, author?: {login?: string}}>}} pr
+ * @param {{trustedReviewers?: string[]}} [cfg]  when non-empty, an APPROVE must come
+ *   from one of these logins (provenance pin, cage-match #122). Unset → the named
+ *   tradeoff: reviewDecision===APPROVED already excludes the PR author, so the
+ *   green-auto bot can't self-approve; Nick's explicit Telegram "merge" is gate 1.
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
-export function mergeGateOk(pr) {
+export function mergeGateOk(pr, cfg = {}) {
   if (!pr || pr.state !== 'OPEN') return { ok: false, reason: `PR is not open (state=${pr?.state ?? '?'})` };
   // WHITELIST, not blacklist: only an explicitly MERGEABLE PR. GitHub's UNKNOWN /
   // null is "not yet computed" and must NOT slip through to an --admin merge
@@ -97,6 +101,14 @@ export function mergeGateOk(pr) {
   if (!labels.includes('cage-matched')) return { ok: false, reason: 'PR is not cage-matched (missing the cage-matched label)' };
   const badCheck = failingCheck(pr.statusCheckRollup);
   if (badCheck) return { ok: false, reason: `a status check is not passing: ${badCheck}` };
+  // Provenance pin (opt-in): when a trusted-reviewer allowlist is configured, require
+  // an APPROVE from one of those logins, so an APPROVED PR can't ride a review from an
+  // unexpected identity into an --admin merge (cage-match #122, Carnot HIGH).
+  const trusted = cfg.trustedReviewers;
+  if (trusted && trusted.length) {
+    const byTrusted = (pr.reviews || []).some((r) => r?.state === 'APPROVED' && trusted.includes(r?.author?.login));
+    if (!byTrusted) return { ok: false, reason: `no APPROVE from a trusted reviewer (${trusted.join(', ')})` };
+  }
   return { ok: true };
 }
 

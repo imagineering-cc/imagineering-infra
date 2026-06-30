@@ -50,7 +50,7 @@ export async function runApproveCycle(updates, io, cfg) {
       actions.push({ updateId: d.updateId, error: `view ${ref}: ${e.message}` });
       continue;
     }
-    const gate = mergeGateOk(view);
+    const gate = mergeGateOk(view, cfg);
     if (!gate.ok) {
       await io.reply(chat, `❌ Not merging ${ref}: ${gate.reason}. (Your “merge” is approval, not a bypass — fix the gate and re-approve.)`);
       actions.push({ updateId: d.updateId, refused: gate.reason });
@@ -96,7 +96,7 @@ function makeRealIO(botToken, mergeToken) {
     viewPr(repo, pr) {
       // statusCheckRollup is fetched so mergeGateOk can refuse a FAILING/pending check
       // rather than --admin-bypassing it (cage-match #122, Carnot HIGH).
-      const out = gh(['pr', 'view', String(pr), '-R', repo, '--json', 'state,mergeable,reviewDecision,labels,isDraft,statusCheckRollup']);
+      const out = gh(['pr', 'view', String(pr), '-R', repo, '--json', 'state,mergeable,reviewDecision,labels,isDraft,statusCheckRollup,reviews']);
       return JSON.parse(out);
     },
     mergePr(repo, pr) {
@@ -142,7 +142,9 @@ async function main() {
   try {
     // The bot's own user id, so a reply-to only resolves a PR from the BOT's ping.
     const me = await tgGet(botToken, 'getMe');
-    const cfg = { nickUserId, botUserId: me?.id, defaultRepo: process.env.HEALER_APPROVE_DEFAULT_REPO };
+    const trustedReviewers = (process.env.HEALER_APPROVE_TRUSTED_REVIEWERS || '')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    const cfg = { nickUserId, botUserId: me?.id, defaultRepo: process.env.HEALER_APPROVE_DEFAULT_REPO, trustedReviewers };
 
     const offset = readOffset(offsetFile);
     const updates = await tgGetUpdates(botToken, offset);

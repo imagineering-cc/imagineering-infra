@@ -246,8 +246,14 @@ phone. The merge gate stays HUMAN; the "yes" is approval, never a bypass.
   NICK_TELEGRAM_USER_ID=<Nick's Telegram user id>     # the ONLY approver (gate 1)
   HEALER_APPROVE_MERGE_TOKEN=<a GH token that can merge>  # SEPARATE from the bot token
   # optional: HEALER_APPROVE_DEFAULT_REPO=owner/name (resolves a bare "#N")
+  # recommended: HEALER_APPROVE_TRUSTED_REVIEWERS=nick,maxwell-merge-slam  (provenance pin)
   # cron (box): */2 * * * * node /opt/self-healer/src/approve-poll.mjs
   ```
+  When `HEALER_APPROVE_TRUSTED_REVIEWERS` is set, gate 3 additionally requires the PR's
+  APPROVE to come from one of those logins — so an `APPROVED` state can't ride a review
+  from an unexpected identity into the merge. Unset → the named tradeoff (reviewDecision
+  already excludes the PR author, so the green-auto bot can't self-approve; pinning the
+  *label* author is task #10).
   Honesty about `--admin`: the merge runs `gh pr merge --admin` because branch
   protection requires CI checks that **never run** (GHA is permanently out of minutes).
   `--admin` bypasses the *absent required* check — but gate 3 has already refused any
