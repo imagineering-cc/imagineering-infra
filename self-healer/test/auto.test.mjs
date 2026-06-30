@@ -17,6 +17,8 @@ import {
   cageSubstrate,
   buildRunCageSpawn,
   autoFixIfActionable,
+  actionForExit,
+  AUTO_ACTIONS,
   RUN_CAGE_PATH,
   CLONE_SCRIPT,
 } from '../src/auto.mjs';
@@ -27,6 +29,7 @@ function withEnv(overrides, fn) {
     'HEALER_GREEN_AUTO', 'HEALER_GREEN_AUTO_TOKEN', 'HEALER_HOST',
     'HEALER_GH_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN',
     'HEALER_CAGE_IMAGE', 'HEALER_CAGE_NETWORK', 'HEALER_CAGE_PROXY_URL', 'HEALER_CAGE_AGENT_CMD',
+    'HEALER_CAGE_CLAUDE_TOKEN',
   ];
   const saved = {};
   for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; }
@@ -88,24 +91,56 @@ test('boundedAuthority: refuses when bound matches a NON-FIRST broad token (cage
 test('cageSubstrate: names every missing var and fails closed', () => {
   const r = cageSubstrate({});
   assert.equal(r.ok, false);
-  for (const v of ['HEALER_CAGE_IMAGE', 'HEALER_CAGE_NETWORK', 'HEALER_CAGE_PROXY_URL', 'HEALER_CAGE_AGENT_CMD']) {
+  for (const v of ['HEALER_CAGE_IMAGE', 'HEALER_CAGE_NETWORK', 'HEALER_CAGE_PROXY_URL', 'HEALER_CAGE_AGENT_CMD', 'HEALER_CAGE_CLAUDE_TOKEN']) {
     assert.match(r.reason, new RegExp(v), `reason should name ${v}`);
   }
 });
 
-test('cageSubstrate: ok when all provisioned', () => {
+test('cageSubstrate: missing ONLY the inference token still fails closed (no spawn without inference creds)', () => {
   const r = cageSubstrate({
     HEALER_CAGE_IMAGE: 'agent:1', HEALER_CAGE_NETWORK: 'cage-internal',
     HEALER_CAGE_PROXY_URL: 'http://proxy:3128', HEALER_CAGE_AGENT_CMD: 'claude -p',
+    // HEALER_CAGE_CLAUDE_TOKEN omitted
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /HEALER_CAGE_CLAUDE_TOKEN/);
+});
+
+test('cageSubstrate: ok when all provisioned (incl. inference token)', () => {
+  const r = cageSubstrate({
+    HEALER_CAGE_IMAGE: 'agent:1', HEALER_CAGE_NETWORK: 'cage-internal',
+    HEALER_CAGE_PROXY_URL: 'http://proxy:3128', HEALER_CAGE_AGENT_CMD: 'claude -p',
+    HEALER_CAGE_CLAUDE_TOKEN: 'sk-ant-oat-xyz',
   });
   assert.equal(r.ok, true);
   assert.equal(r.agentCmd, 'claude -p');
+  assert.equal(r.claudeToken, 'sk-ant-oat-xyz');
+});
+
+// ── exit-code → outcome mapping (cage-match #121, Carnot) ────────────────────
+
+test('actionForExit: clean exit 0 → CAGED (a draft PR was opened)', () => {
+  const r = actionForExit(0, 'abc123def456789');
+  assert.equal(r.action, AUTO_ACTIONS.CAGED);
+  assert.match(r.detail, /abc123def456/);
+});
+
+test('actionForExit: NO_DIFF (exit 3) → NO_FIX, NOT FAILED (benign empty-diff is not failure telemetry)', () => {
+  const r = actionForExit(3, 'abc123def456789');
+  assert.equal(r.action, AUTO_ACTIONS.NO_FIX);
+  assert.notEqual(r.action, AUTO_ACTIONS.FAILED);
+});
+
+test('actionForExit: any other non-zero exit → FAILED', () => {
+  for (const code of [1, 2, 4, 5, 6, 7, 'signal:SIGKILL']) {
+    assert.equal(actionForExit(code, 'fp').action, AUTO_ACTIONS.FAILED, `exit ${code} should be FAILED`);
+  }
 });
 
 // ── Pure spawn shape ─────────────────────────────────────────────────────────
 
 test('buildRunCageSpawn: routes through run-cage.mjs and carries the BOUNDED token only', () => {
-  const substrate = { image: 'agent:1', network: 'cage-internal', proxyUrl: 'http://proxy:3128', agentCmd: 'claude -p --headless' };
+  const substrate = { image: 'agent:1', network: 'cage-internal', proxyUrl: 'http://proxy:3128', agentCmd: 'claude -p --headless', claudeToken: 'sk-ant-oat-xyz' };
   const spec = buildRunCageSpawn({
     finding: greenFinding(), repo: 'imagineering-cc/embodied-dreamfinder',
     workdirHost: '/tmp/healer-green-auto.AAA', token: 'repo-scoped-xyz', substrate,
@@ -119,6 +154,10 @@ test('buildRunCageSpawn: routes through run-cage.mjs and carries the BOUNDED tok
   // the bounded token rides in; the broad host token name is absent
   assert.equal(spec.env.CAGE_GH_TOKEN, 'repo-scoped-xyz');
   assert.equal(spec.env.HEALER_GH_TOKEN, undefined);
+  // the inference token rides in as CAGE_CLAUDE_TOKEN (run-cage maps it key-only to
+  // CLAUDE_CODE_OAUTH_TOKEN inside the cage); the raw env var name is NEVER set here
+  assert.equal(spec.env.CAGE_CLAUDE_TOKEN, 'sk-ant-oat-xyz');
+  assert.equal(spec.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
   assert.equal(spec.env.CAGE_WORKDIR, '/tmp/healer-green-auto.AAA');
   assert.equal(spec.env.CAGE_IMAGE, 'agent:1');
   assert.equal(spec.env.CAGE_AGENT_REPO, 'imagineering-cc/embodied-dreamfinder');
@@ -206,10 +245,25 @@ test('autoFixIfActionable: bounded token present but cage substrate missing → 
   });
 });
 
+test('autoFixIfActionable: substrate present but inference token missing → refusal, no spawn', async () => {
+  // The agent can't run `claude -p` without CLAUDE_CODE_OAUTH_TOKEN, so a missing
+  // HEALER_CAGE_CLAUDE_TOKEN must fail closed exactly like a missing image/network.
+  await withEnv({
+    HEALER_GREEN_AUTO: '1', HEALER_GREEN_AUTO_TOKEN: 'repo-scoped',
+    HEALER_CAGE_IMAGE: 'i', HEALER_CAGE_NETWORK: 'n', HEALER_CAGE_PROXY_URL: 'p', HEALER_CAGE_AGENT_CMD: 'a',
+    // HEALER_CAGE_CLAUDE_TOKEN omitted
+  }, async () => {
+    const out = await autoFixIfActionable({ findings: [greenFinding()] });
+    assert.equal(out[0].action, 'refused');
+    assert.match(out[0].detail, /HEALER_CAGE_CLAUDE_TOKEN/);
+  });
+});
+
 test('autoFixIfActionable: a non-actionable verdict yields no findings even when fully gated', async () => {
   await withEnv({
     HEALER_GREEN_AUTO: '1', HEALER_GREEN_AUTO_TOKEN: 'repo-scoped',
     HEALER_CAGE_IMAGE: 'i', HEALER_CAGE_NETWORK: 'n', HEALER_CAGE_PROXY_URL: 'p', HEALER_CAGE_AGENT_CMD: 'a',
+    HEALER_CAGE_CLAUDE_TOKEN: 'sk-ant-oat-xyz',
   }, async () => {
     // amber finding → not in the green-auto set → empty (gates passed, nothing to do)
     const out = await autoFixIfActionable({ findings: [greenFinding({ tier: 'amber' })] });
