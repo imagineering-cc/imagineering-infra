@@ -223,5 +223,45 @@ act, done in this order (each step is the precondition for the next):
    in its body. Foreground the first run (verify each step) — do not cron-arm it
    until one finding has gone end-to-end and been reviewed.
 
-Remaining beyond this PR (tracked, not in scope here): the Telegram lifecycle notify
-+ two-way "yes merge" approve loop (the merge gate stays human regardless).
+### Telegram approve loop (Increment C — built, provisioned separately)
+
+green-auto pings Nick when it opens a draft PR (the orchestrator sends it — the caged
+agent has no egress to notify), and Nick can reply **"merge #N"** to merge from his
+phone. The merge gate stays HUMAN; the "yes" is approval, never a bypass.
+
+- **Notify (one-way)** rides the existing `notify` proxy — only needs `NOTIFY_API_KEY`
+  (already a healer env). Each draft PR → a ping with the link + the exact "merge #N"
+  reply; a stumble → a warning ping.
+- **Approve (two-way)** is `src/approve-poll.mjs`, run on a short cron on the box. It
+  polls the notify bot's `getUpdates` and merges ONLY when all gates hold:
+  (1) the message is from `NICK_TELEGRAM_USER_ID` (his specific id, not "anyone in the
+  chat"); (2) it unambiguously names the PR — a URL, or a reply to the **bot's own**
+  ping (a reply to a non-bot message is not trusted); (3) a LIVE re-check shows the PR
+  OPEN + `mergeable === MERGEABLE` (whitelist, not "not-conflicting") + reviewer-APPROVED
+  + `cage-matched`-labelled + **no status check failing or pending**. Fail-closed: a
+  single-instance lock prevents cron-overlap double-merges, and the poller refuses to
+  start unless its creds are provisioned.
+  ```sh
+  HEALER_APPROVE_BOT_TOKEN=<the notify bot token>     # getUpdates + replies (read-only authority)
+  NICK_TELEGRAM_USER_ID=<Nick's Telegram user id>     # the ONLY approver (gate 1)
+  HEALER_APPROVE_MERGE_TOKEN=<a GH token that can merge>  # SEPARATE from the bot token
+  # optional: HEALER_APPROVE_DEFAULT_REPO=owner/name (resolves a bare "#N")
+  # recommended: HEALER_APPROVE_TRUSTED_REVIEWERS=nick,maxwell-merge-slam  (provenance pin)
+  # cron (box): */2 * * * * node /opt/self-healer/src/approve-poll.mjs
+  ```
+  When `HEALER_APPROVE_TRUSTED_REVIEWERS` is set, gate 3 additionally requires the PR's
+  APPROVE to come from one of those logins — so an `APPROVED` state can't ride a review
+  from an unexpected identity into the merge. Unset → the named tradeoff (reviewDecision
+  already excludes the PR author, so the green-auto bot can't self-approve; pinning the
+  *label* author is task #10).
+  Honesty about `--admin`: the merge runs `gh pr merge --admin` because branch
+  protection requires CI checks that **never run** (GHA is permanently out of minutes).
+  `--admin` bypasses the *absent required* check — but gate 3 has already refused any
+  check that EXISTS and isn't passing, plus required APPROVED + cage-matched, so it
+  never bypasses a *real* signal. The "yes" is human approval, not a gate bypass.
+  - `getUpdates` conflicts with a Telegram webhook — the notify bot must be in polling
+    mode (it is; `notify.py` only sends).
+  - **Merge-token blast radius (named tradeoff):** `--admin` needs *admin* on each repo
+    green-auto spans, so `HEALER_APPROVE_MERGE_TOKEN` is a broad multi-repo admin
+    credential. A fine-grained per-repo token set would be tighter; for v1 it's one
+    admin token, bounded by the human approval + the green gate above.

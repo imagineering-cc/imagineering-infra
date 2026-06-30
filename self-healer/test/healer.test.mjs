@@ -111,21 +111,28 @@ test('draftIfActionable: enabled but no token ⇒ skipped, no network', async ()
 });
 
 test('scrubSecrets: redacts known token prefixes', () => {
-  assert.match(scrubSecrets('token sk-ant-oat01-abc123DEF_xyz here'), /<redacted:anthropic-key>/);
-  assert.match(scrubSecrets('ghs_AAAABBBBCCCCDDDD1111'), /<redacted:github-token>/);
-  assert.match(scrubSecrets('github_pat_11ABCDEFG_longtailwithunderscores0000'), /<redacted:github-token>/);
+  assert.match(scrubSecrets('token sk-ant-oat01-abc123DEF_xyz here'), /\[redacted:anthropic-key\]/);
+  assert.match(scrubSecrets('ghs_AAAABBBBCCCCDDDD1111'), /\[redacted:github-token\]/);
+  assert.match(scrubSecrets('github_pat_11ABCDEFG_longtailwithunderscores0000'), /\[redacted:github-token\]/);
   assert.doesNotMatch(scrubSecrets('Authorization: Bearer abcdef1234567890'), /abcdef1234567890/);
   assert.equal(scrubSecrets('nothing secret here'), 'nothing secret here');
 });
 
+test('scrubSecrets: redaction markers are HTML-safe (no angle brackets — cage-match #122)', () => {
+  // The markers must not contain < or >, so scrubbing an already-HTML-escaped string
+  // (sendNotify scrubs the final message) can't reintroduce raw markup.
+  const out = scrubSecrets('sk-ant-oat01-abc123DEF_xyz and ghs_AAAABBBBCCCCDDDD1111');
+  assert.doesNotMatch(out, /[<>]/);
+});
+
 test('scrubSecrets: catches the shapes a prefix list misses (cage-match PR #101)', () => {
   // AWS *secret* key (40-char base64, no prefix) → high-entropy catch-all.
-  assert.match(scrubSecrets('aws wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1'), /<redacted/);
+  assert.match(scrubSecrets('aws wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1'), /\[redacted/);
   // k=v with a sensitive key name and an unknown token format.
-  assert.match(scrubSecrets('password=hunter2supersecret'), /password=<redacted>/);
-  assert.match(scrubSecrets('client_secret: abc.def.ghi'), /client_secret:\s*<redacted>/);
+  assert.match(scrubSecrets('password=hunter2supersecret'), /password=\[redacted\]/);
+  assert.match(scrubSecrets('client_secret: abc.def.ghi'), /client_secret:\s*\[redacted\]/);
   // PEM private key block.
-  assert.match(scrubSecrets('-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----'), /<redacted:private-key>/);
+  assert.match(scrubSecrets('-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----'), /\[redacted:private-key\]/);
 });
 
 test('scrubSecrets: preserves short diagnostic IDs (LiveKit nodeIds ~24 chars)', () => {
