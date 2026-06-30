@@ -162,23 +162,38 @@ export function passesCooldown(verdict, nowMs) {
 export async function pingIfNoteworthy(verdict, nowMs = Date.now()) {
   if (verdict.overallTier === 'green') return { pinged: false, reason: 'green — nothing to report' };
   if (process.env.HEALER_NO_PING === '1') return { pinged: false, reason: 'disabled via HEALER_NO_PING' };
-
-  const apiKey = process.env.NOTIFY_API_KEY;
-  if (!apiKey) return { pinged: false, reason: 'no NOTIFY_API_KEY configured' };
-
+  if (!process.env.NOTIFY_API_KEY) return { pinged: false, reason: 'no NOTIFY_API_KEY configured' };
   if (!passesCooldown(verdict, nowMs)) return { pinged: false, reason: 'cooldown — same problem set recently pinged' };
 
-  const url = resolveNotifyUrl();
-  const message = formatVerdict(verdict);
-  const res = await fetch(url, {
+  const { sent, reason } = await sendNotify(formatVerdict(verdict));
+  return sent ? { pinged: true } : { pinged: false, reason };
+}
+
+/**
+ * Send a raw message to Nick via the notify proxy. Scrubs secrets + caps to
+ * Telegram's length limit. A SILENT no-op (sent:false) when NOTIFY_API_KEY is
+ * unset, so a dev run never errors and an unconfigured box never throws. Used for
+ * green-auto lifecycle pings (PR opened / failed) where there is no verdict —
+ * `pingIfNoteworthy` delegates its actual POST here too. Respects HEALER_NO_PING.
+ * @param {string} message  may contain attacker-influenceable diagnosis text → scrubbed
+ * @param {{parseMode?: string}} [opts]
+ * @returns {Promise<{sent: boolean, reason?: string}>}
+ */
+export async function sendNotify(message, { parseMode = 'HTML' } = {}) {
+  if (process.env.HEALER_NO_PING === '1') return { sent: false, reason: 'disabled via HEALER_NO_PING' };
+  const apiKey = process.env.NOTIFY_API_KEY;
+  if (!apiKey) return { sent: false, reason: 'no NOTIFY_API_KEY configured' };
+
+  const safe = scrubSecrets(String(message ?? '')).slice(0, TELEGRAM_MAX);
+  const res = await fetch(resolveNotifyUrl(), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ message, parse_mode: 'HTML' }),
+    body: JSON.stringify({ message: safe, parse_mode: parseMode }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`notify /send failed (${res.status}): ${body.slice(0, 200)}`);
   }
-  return { pinged: true };
+  return { sent: true };
 }

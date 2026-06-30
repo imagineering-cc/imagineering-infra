@@ -88,6 +88,29 @@ export function actionForExit(exitCode, fp) {
   return { action: AUTO_ACTIONS.FAILED, detail: `cage exited ${exitCode}` };
 }
 
+/** PURE: the PR number from a GitHub PR URL, or null. */
+export function prNumberFromUrl(url) {
+  const m = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/.exec(String(url || ''));
+  return m ? Number(m[1]) : null;
+}
+
+/** PURE: the Telegram lifecycle message for one green-auto outcome, or null when
+ * the outcome doesn't warrant pinging Nick (deduped / skipped / no-fix / refused are
+ * quiet — only an actual PR or a stumble is news). The CAGED ping carries the PR link
+ * + the finding signature + the exact "merge #N" reply that the approve listener
+ * (Increment C2) accepts; the FAILED ping flags that the monster stumbled. HTML. */
+export function formatAutoOutcome(o) {
+  if (o.action === AUTO_ACTIONS.CAGED) {
+    const n = prNumberFromUrl(o.prUrl);
+    const mergeHint = n ? `reply <b>“merge #${n}”</b>` : 'reply <b>“merge #&lt;PR&gt;”</b>';
+    return `🤖 <b>green-auto opened a draft PR</b>\n${o.prUrl || '(no url captured)'}\n<code>${o.container}</code>: ${o.signature || o.detail || ''}\n\nReview, then ${mergeHint} to merge (CI + cage-match must still be green — your “merge” is approval, not a bypass).`;
+  }
+  if (o.action === AUTO_ACTIONS.FAILED) {
+    return `⚠️ <b>green-auto stumbled</b> on <code>${o.container}</code>: ${o.detail || 'unknown error'} — no PR opened. Check the healer logs.`;
+  }
+  return null; // deduped / skipped / no-fix / refused → quiet
+}
+
 /** EVERY broad host token currently in the env (the healer's own GH-API creds,
  * any of the three names draft.mjs accepts). The bound green-auto token must
  * equal NONE of them — checking only the first (a `A || B || C` short-circuit)
@@ -285,14 +308,27 @@ function cleanupWorkdir(dir) {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort; see note */ }
 }
 
-/** Spawn `node run-cage.mjs -- <agentCmd>` for one finding; resolve its exit code.
- * stdio inherited so the caged agent's output reaches the healer's logs. */
+/** Spawn `node run-cage.mjs -- <agentCmd>` for one finding; resolve {exitCode,
+ * stdout}. stderr is INHERITED (the agent's log() chatter streams to the healer's
+ * logs live); stdout is CAPTURED because the agent entrypoint prints ONLY the PR
+ * URL there — so the orchestrator can ping Nick with the link (Increment C). */
 function spawnCage({ bin, argv, env }) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, argv, { stdio: 'inherit', env: { ...process.env, ...env } });
+    const proc = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, ...env } });
+    let stdout = '';
+    proc.stdout.on('data', (d) => { stdout += d; });
     proc.on('error', reject);
-    proc.on('exit', (code, signal) => resolve(signal ? `signal:${signal}` : (code ?? -1)));
+    proc.on('exit', (code, signal) => resolve({ exitCode: signal ? `signal:${signal}` : (code ?? -1), stdout }));
   });
+}
+
+/** The PR URL the agent printed on stdout (last non-blank line; the entrypoint
+ * writes ONLY the URL there). Returns '' if absent. A light guard that it looks
+ * like a GitHub PR URL so a stray stdout line doesn't masquerade as one. */
+export function prUrlFromStdout(stdout) {
+  const lines = String(stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const last = lines[lines.length - 1] || '';
+  return /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(last) ? last : '';
 }
 
 /**
@@ -356,12 +392,15 @@ export async function autoFixIfActionable(verdict, env = process.env) {
     try {
       workdirHost = await prepareWorkdir(repo, auth.token);
       const spawnSpec = buildRunCageSpawn({ finding: f, repo, workdirHost, token: auth.token, substrate: sub });
-      const exitCode = await spawnCage(spawnSpec);
+      const { exitCode, stdout } = await spawnCage(spawnSpec);
       const { action, detail } = actionForExit(exitCode, fp);
+      const prUrl = action === AUTO_ACTIONS.CAGED ? prUrlFromStdout(stdout) : '';
       outcomes.push({
         container: f.container,
         action,
         detail,
+        signature: f.signature, // for the lifecycle Telegram ping (Increment C)
+        prUrl,
         workdir: workdirHost,
         exitCode,
       });

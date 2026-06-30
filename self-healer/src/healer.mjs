@@ -16,9 +16,9 @@ import { gatherSignals, assertValidContainerName } from './sensor.mjs';
 import { diagnose } from './diagnose.mjs';
 import { isOnBox } from './host.mjs';
 import { tierExitCode } from './tiers.mjs';
-import { pingIfNoteworthy } from './notify.mjs';
+import { pingIfNoteworthy, sendNotify } from './notify.mjs';
 import { draftIfActionable } from './draft.mjs';
-import { autoFixIfActionable } from './auto.mjs';
+import { autoFixIfActionable, formatAutoOutcome } from './auto.mjs';
 
 /**
  * Load + validate the watch list. Fails CLOSED on a malformed config so a bad
@@ -133,6 +133,16 @@ async function main() {
     const outcomes = await autoFixIfActionable(verdict);
     for (const o of outcomes) {
       process.stderr.write(`[healer] green-auto ${o.action}: ${o.container}${o.workdir ? ` [${o.workdir}]` : ''}${o.detail ? ` (${o.detail})` : ''}\n`);
+      // Lifecycle ping (Increment C): "PR opened" carries the link + the exact
+      // "merge #N" reply the approve listener accepts; a stumble flags for a look.
+      // The orchestrator (NOT the caged agent — it has no egress to notify) sends it.
+      // A notify failure must never change the diagnostic exit code, so each send is
+      // isolated: an error here is logged, not thrown.
+      const msg = formatAutoOutcome(o);
+      if (msg) {
+        try { await sendNotify(msg); }
+        catch (e) { process.stderr.write(`[healer] green-auto notify failed (non-fatal): ${e.message}\n`); }
+      }
     }
   } catch (err) {
     process.stderr.write(`[healer] green-auto FAILED (verdict still stands): ${err.message}\n`);

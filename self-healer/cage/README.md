@@ -223,5 +223,28 @@ act, done in this order (each step is the precondition for the next):
    in its body. Foreground the first run (verify each step) — do not cron-arm it
    until one finding has gone end-to-end and been reviewed.
 
-Remaining beyond this PR (tracked, not in scope here): the Telegram lifecycle notify
-+ two-way "yes merge" approve loop (the merge gate stays human regardless).
+### Telegram approve loop (Increment C — built, provisioned separately)
+
+green-auto pings Nick when it opens a draft PR (the orchestrator sends it — the caged
+agent has no egress to notify), and Nick can reply **"merge #N"** to merge from his
+phone. The merge gate stays HUMAN; the "yes" is approval, never a bypass.
+
+- **Notify (one-way)** rides the existing `notify` proxy — only needs `NOTIFY_API_KEY`
+  (already a healer env). Each draft PR → a ping with the link + the exact "merge #N"
+  reply; a stumble → a warning ping.
+- **Approve (two-way)** is `src/approve-poll.mjs`, run on a short cron on the box. It
+  polls the notify bot's `getUpdates`, and merges ONLY when all three gates hold:
+  (1) the message is from `NICK_TELEGRAM_USER_ID` (his specific id, not "anyone in the
+  chat"); (2) it unambiguously names the PR (URL, or a reply to the ping); (3) a LIVE
+  re-check shows the PR OPEN + mergeable + reviewer-APPROVED + `cage-matched`-labelled.
+  Fail-closed: refuses to start unless its creds are provisioned.
+  ```sh
+  HEALER_APPROVE_BOT_TOKEN=<the notify bot token>     # getUpdates + replies (read-only authority)
+  NICK_TELEGRAM_USER_ID=<Nick's Telegram user id>     # the ONLY approver (gate 1)
+  HEALER_APPROVE_MERGE_TOKEN=<a GH token that can merge>  # SEPARATE from the bot token
+  # optional: HEALER_APPROVE_DEFAULT_REPO=owner/name (resolves a bare "#N")
+  # cron (box): * * * * * node /opt/self-healer/src/approve-poll.mjs   # or every 2 min
+  ```
+  Note: `getUpdates` conflicts with a Telegram webhook — the notify bot must be in
+  polling mode (it is; `notify.py` only sends). The merge token is its OWN credential:
+  the bot only reads/replies, merge authority never rides the bot token.

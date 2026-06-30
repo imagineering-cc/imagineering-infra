@@ -18,6 +18,9 @@ import {
   buildRunCageSpawn,
   autoFixIfActionable,
   actionForExit,
+  prUrlFromStdout,
+  prNumberFromUrl,
+  formatAutoOutcome,
   AUTO_ACTIONS,
   RUN_CAGE_PATH,
   CLONE_SCRIPT,
@@ -134,6 +137,36 @@ test('actionForExit: NO_DIFF (exit 3) → NO_FIX, NOT FAILED (benign empty-diff 
 test('actionForExit: any other non-zero exit → FAILED', () => {
   for (const code of [1, 2, 4, 5, 6, 7, 'signal:SIGKILL']) {
     assert.equal(actionForExit(code, 'fp').action, AUTO_ACTIONS.FAILED, `exit ${code} should be FAILED`);
+  }
+});
+
+// ── lifecycle notify formatting (Increment C) ────────────────────────────────
+
+test('prUrlFromStdout: extracts a GitHub PR URL from the last stdout line, else ""', () => {
+  assert.equal(prUrlFromStdout('some log\nhttps://github.com/o/r/pull/42'), 'https://github.com/o/r/pull/42');
+  assert.equal(prUrlFromStdout('https://github.com/o/r/pull/42\n'), 'https://github.com/o/r/pull/42');
+  assert.equal(prUrlFromStdout('not a url'), ''); // a stray line must not masquerade as a PR url
+  assert.equal(prUrlFromStdout(''), '');
+});
+
+test('prNumberFromUrl: pulls the PR number, or null', () => {
+  assert.equal(prNumberFromUrl('https://github.com/o/r/pull/42'), 42);
+  assert.equal(prNumberFromUrl('https://github.com/o/r/issues/42'), null);
+  assert.equal(prNumberFromUrl(''), null);
+});
+
+test('formatAutoOutcome: CAGED → a ping with the link AND the exact "merge #N" reply', () => {
+  const msg = formatAutoOutcome({ action: AUTO_ACTIONS.CAGED, container: 'edf', signature: 'null deref', prUrl: 'https://github.com/o/r/pull/42' });
+  assert.match(msg, /draft PR/);
+  assert.match(msg, /pull\/42/);
+  assert.match(msg, /merge #42/); // the listener (C2) accepts exactly this
+  assert.match(msg, /null deref/);
+});
+
+test('formatAutoOutcome: FAILED → a stumble ping; benign outcomes are quiet (null)', () => {
+  assert.match(formatAutoOutcome({ action: AUTO_ACTIONS.FAILED, container: 'edf', detail: 'cage exited 5' }), /stumbled/);
+  for (const a of [AUTO_ACTIONS.DEDUPED, AUTO_ACTIONS.SKIPPED, AUTO_ACTIONS.NO_FIX, AUTO_ACTIONS.REFUSED]) {
+    assert.equal(formatAutoOutcome({ action: a, container: 'edf' }), null, `${a} must be a quiet (null) ping`);
   }
 });
 
