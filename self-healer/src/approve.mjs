@@ -35,38 +35,45 @@ export function isApprovalText(text) {
 /**
  * Decide what to do with one Telegram update. PURE.
  * @param {object} update  a Telegram getUpdates result item
- * @param {{nickUserId: number, defaultRepo?: string}} cfg
+ * @param {{nickUserId: number, botUserId?: number, defaultRepo?: string}} cfg
  *   nickUserId — the ONLY user id allowed to approve (gate 1).
+ *   botUserId — the notify bot's own user id; a reply-to only resolves the PR when
+ *     the replied-to message is the BOT's ping (cage-match #122, Carnot MEDIUM — else
+ *     an attacker in a group could plant a PR URL for Nick to reply to).
  *   defaultRepo — optional "owner/name" to resolve a bare "#N" against; omit to
  *     REQUIRE a URL/reply (the safe default for a multi-repo healer).
- * @returns {{merge: {repo: string, pr: number}, updateId: number}
- *          | {ignore: string, updateId: number}}
+ * @returns {{merge: {repo: string, pr: number}, updateId: number, chatId: number}
+ *          | {ignore: string, updateId: number, chatId: number}}
  */
 export function approvalDecision(update, cfg = {}) {
   const updateId = update?.update_id;
   const msg = update?.message;
-  if (!msg) return { ignore: 'no message in update', updateId };
+  if (!msg) return { ignore: 'no message in update', updateId, chatId: undefined };
+  const chatId = msg.chat?.id; // the chat to answer in — carried per update (cage-match #122)
 
   // Gate 1: the approver MUST be Nick's specific user id.
   if (!cfg.nickUserId || msg.from?.id !== cfg.nickUserId) {
-    return { ignore: `sender ${msg.from?.id ?? '?'} is not the authorized approver`, updateId };
+    return { ignore: `sender ${msg.from?.id ?? '?'} is not the authorized approver`, updateId, chatId };
   }
 
   // Must carry an explicit approval verb.
-  if (!isApprovalText(msg.text)) return { ignore: 'no approval verb (need "merge"/"approve")', updateId };
+  if (!isApprovalText(msg.text)) return { ignore: 'no approval verb (need "merge"/"approve")', updateId, chatId };
 
-  // Gate 2: resolve WHICH PR. Prefer a URL in the approval text, then the quoted
-  // ping's text (reply-to), then a bare #N against a configured default repo.
+  // Gate 2: resolve WHICH PR. Prefer a URL in the approval text; then the quoted
+  // ping's text — but ONLY when the replied-to message is the BOT's own ping (so a
+  // planted group message can't supply the target); then a bare #N against a
+  // configured default repo.
   const fromText = parsePrUrl(msg.text);
-  const fromReply = parsePrUrl(msg.reply_to_message?.text);
+  const replyIsBotPing = cfg.botUserId && msg.reply_to_message?.from?.id === cfg.botUserId;
+  const fromReply = replyIsBotPing ? parsePrUrl(msg.reply_to_message?.text) : null;
   let target = fromText || fromReply;
   if (!target) {
     const bare = /(?:^|\s)#?(\d{1,7})\b/.exec(String(msg.text || ''));
     if (bare && cfg.defaultRepo) target = { repo: cfg.defaultRepo, pr: Number(bare[1]) };
   }
-  if (!target) return { ignore: 'approval did not unambiguously reference a PR (need a PR URL or a reply to the ping)', updateId };
+  if (!target) return { ignore: 'approval did not unambiguously reference a PR (need a PR URL, or a reply to the bot ping)', updateId, chatId };
 
-  return { merge: target, updateId };
+  return { merge: target, updateId, chatId };
 }
 
 /**
@@ -76,14 +83,36 @@ export function approvalDecision(update, cfg = {}) {
  * the `cage-matched` label (the signal that the adversarial review passed). A draft
  * is allowed (the poller marks it ready first) — draftness is not a block, an
  * un-reviewed or un-cage-matched PR is.
- * @param {{state?: string, mergeable?: string, reviewDecision?: string, labels?: Array<{name?:string}|string>}} pr
+ * @param {{state?: string, mergeable?: string, reviewDecision?: string, labels?: Array<{name?:string}|string>, statusCheckRollup?: Array<object>}} pr
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
 export function mergeGateOk(pr) {
   if (!pr || pr.state !== 'OPEN') return { ok: false, reason: `PR is not open (state=${pr?.state ?? '?'})` };
-  if (pr.mergeable === 'CONFLICTING') return { ok: false, reason: 'PR has merge conflicts' };
+  // WHITELIST, not blacklist: only an explicitly MERGEABLE PR. GitHub's UNKNOWN /
+  // null is "not yet computed" and must NOT slip through to an --admin merge
+  // (cage-match #122, both adversaries).
+  if (pr.mergeable !== 'MERGEABLE') return { ok: false, reason: `PR is not mergeable (mergeable=${pr.mergeable || 'unknown'})` };
   if (pr.reviewDecision !== 'APPROVED') return { ok: false, reason: `PR is not approved (reviewDecision=${pr.reviewDecision || 'none'})` };
   const labels = (pr.labels || []).map((l) => (typeof l === 'string' ? l : l?.name));
   if (!labels.includes('cage-matched')) return { ok: false, reason: 'PR is not cage-matched (missing the cage-matched label)' };
+  const badCheck = failingCheck(pr.statusCheckRollup);
+  if (badCheck) return { ok: false, reason: `a status check is not passing: ${badCheck}` };
   return { ok: true };
+}
+
+/** The name of the first status check that is NOT terminally passing (failing OR
+ * still running), or null if every check passes. An EMPTY/absent rollup → null: with
+ * GHA permanently out of minutes there are no checks, and `--admin` merges past the
+ * *absent required* check — but a check that EXISTS and is failing/pending blocks the
+ * merge here, so --admin never bypasses a real signal (cage-match #122, Carnot HIGH).
+ * Pass states: a CheckRun conclusion of SUCCESS/NEUTRAL/SKIPPED, or a StatusContext
+ * state of SUCCESS. Everything else (FAILURE/ERROR/PENDING/IN_PROGRESS/…) blocks. */
+export function failingCheck(rollup) {
+  for (const c of rollup || []) {
+    const concl = c?.conclusion; // CheckRun
+    const state = c?.state; // StatusContext
+    const passes = ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(concl) || state === 'SUCCESS';
+    if (!passes) return c?.name || c?.context || concl || state || 'unknown check';
+  }
+  return null;
 }

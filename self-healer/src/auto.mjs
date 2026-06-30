@@ -49,7 +49,7 @@ import { dirname, join } from 'node:path';
 import { actionableFindings, findingFingerprint, acquireDraftLock, releaseDraftLock } from './draft.mjs';
 import { repoForContainer } from './repos.mjs';
 import { runOnHostScript, isOnBox } from './host.mjs';
-import { scrubSecrets } from './notify.mjs';
+import { scrubSecrets, esc } from './notify.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** The one spawn door. green-auto and the escape probe share it so the
@@ -100,13 +100,16 @@ export function prNumberFromUrl(url) {
  * + the finding signature + the exact "merge #N" reply that the approve listener
  * (Increment C2) accepts; the FAILED ping flags that the monster stumbled. HTML. */
 export function formatAutoOutcome(o) {
+  // The container/signature/detail are log-derived = attacker-influenceable, and this
+  // renders under Telegram HTML parse_mode → escape every dynamic field (cage-match
+  // #122, Carnot). The PR URL is validated GitHub shape, but escape it too for safety.
   if (o.action === AUTO_ACTIONS.CAGED) {
     const n = prNumberFromUrl(o.prUrl);
     const mergeHint = n ? `reply <b>“merge #${n}”</b>` : 'reply <b>“merge #&lt;PR&gt;”</b>';
-    return `🤖 <b>green-auto opened a draft PR</b>\n${o.prUrl || '(no url captured)'}\n<code>${o.container}</code>: ${o.signature || o.detail || ''}\n\nReview, then ${mergeHint} to merge (CI + cage-match must still be green — your “merge” is approval, not a bypass).`;
+    return `🤖 <b>green-auto opened a draft PR</b>\n${esc(o.prUrl || '(no url captured)')}\n<code>${esc(o.container)}</code>: ${esc(o.signature || o.detail || '')}\n\nReview, then ${mergeHint} to merge (it must still be mergeable + cage-matched + approved — your “merge” is approval, not a bypass).`;
   }
   if (o.action === AUTO_ACTIONS.FAILED) {
-    return `⚠️ <b>green-auto stumbled</b> on <code>${o.container}</code>: ${o.detail || 'unknown error'} — no PR opened. Check the healer logs.`;
+    return `⚠️ <b>green-auto stumbled</b> on <code>${esc(o.container)}</code>: ${esc(o.detail || 'unknown error')} — no PR opened. Check the healer logs.`;
   }
   return null; // deduped / skipped / no-fix / refused → quiet
 }
@@ -328,7 +331,10 @@ function spawnCage({ bin, argv, env }) {
 export function prUrlFromStdout(stdout) {
   const lines = String(stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
   const last = lines[lines.length - 1] || '';
-  return /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(last) ? last : '';
+  // Extract JUST the URL (anchored at start), so a trailing "…/pull/42 DO-NOT-MERGE"
+  // can't ride along as part of the "url" (cage-match #122, Kelvin).
+  const m = /^(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)\b/.exec(last);
+  return m ? m[1] : '';
 }
 
 /**

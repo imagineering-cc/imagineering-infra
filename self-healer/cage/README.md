@@ -233,18 +233,29 @@ phone. The merge gate stays HUMAN; the "yes" is approval, never a bypass.
   (already a healer env). Each draft PR → a ping with the link + the exact "merge #N"
   reply; a stumble → a warning ping.
 - **Approve (two-way)** is `src/approve-poll.mjs`, run on a short cron on the box. It
-  polls the notify bot's `getUpdates`, and merges ONLY when all three gates hold:
+  polls the notify bot's `getUpdates` and merges ONLY when all gates hold:
   (1) the message is from `NICK_TELEGRAM_USER_ID` (his specific id, not "anyone in the
-  chat"); (2) it unambiguously names the PR (URL, or a reply to the ping); (3) a LIVE
-  re-check shows the PR OPEN + mergeable + reviewer-APPROVED + `cage-matched`-labelled.
-  Fail-closed: refuses to start unless its creds are provisioned.
+  chat"); (2) it unambiguously names the PR — a URL, or a reply to the **bot's own**
+  ping (a reply to a non-bot message is not trusted); (3) a LIVE re-check shows the PR
+  OPEN + `mergeable === MERGEABLE` (whitelist, not "not-conflicting") + reviewer-APPROVED
+  + `cage-matched`-labelled + **no status check failing or pending**. Fail-closed: a
+  single-instance lock prevents cron-overlap double-merges, and the poller refuses to
+  start unless its creds are provisioned.
   ```sh
   HEALER_APPROVE_BOT_TOKEN=<the notify bot token>     # getUpdates + replies (read-only authority)
   NICK_TELEGRAM_USER_ID=<Nick's Telegram user id>     # the ONLY approver (gate 1)
   HEALER_APPROVE_MERGE_TOKEN=<a GH token that can merge>  # SEPARATE from the bot token
   # optional: HEALER_APPROVE_DEFAULT_REPO=owner/name (resolves a bare "#N")
-  # cron (box): * * * * * node /opt/self-healer/src/approve-poll.mjs   # or every 2 min
+  # cron (box): */2 * * * * node /opt/self-healer/src/approve-poll.mjs
   ```
-  Note: `getUpdates` conflicts with a Telegram webhook — the notify bot must be in
-  polling mode (it is; `notify.py` only sends). The merge token is its OWN credential:
-  the bot only reads/replies, merge authority never rides the bot token.
+  Honesty about `--admin`: the merge runs `gh pr merge --admin` because branch
+  protection requires CI checks that **never run** (GHA is permanently out of minutes).
+  `--admin` bypasses the *absent required* check — but gate 3 has already refused any
+  check that EXISTS and isn't passing, plus required APPROVED + cage-matched, so it
+  never bypasses a *real* signal. The "yes" is human approval, not a gate bypass.
+  - `getUpdates` conflicts with a Telegram webhook — the notify bot must be in polling
+    mode (it is; `notify.py` only sends).
+  - **Merge-token blast radius (named tradeoff):** `--admin` needs *admin* on each repo
+    green-auto spans, so `HEALER_APPROVE_MERGE_TOKEN` is a broad multi-repo admin
+    credential. A fine-grained per-repo token set would be tighter; for v1 it's one
+    admin token, bounded by the human approval + the green gate above.

@@ -75,7 +75,7 @@ export function scrubSecrets(text) {
 /** Escape the five HTML metacharacters so dynamic text can't break out of (or
  * inject into) the Telegram HTML parse_mode — including quotes, so the markup
  * stays safe if an attribute-bearing tag is ever added. */
-function esc(text) {
+export function esc(text) {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
