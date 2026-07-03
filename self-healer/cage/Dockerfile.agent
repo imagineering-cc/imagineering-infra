@@ -1,0 +1,48 @@
+# Dockerfile.agent — the green-auto codegen agent image (the "monster").
+#
+# Carries exactly the tools the agent needs to turn a log diagnosis into a draft
+# PR: the `claude` CLI (inference + edit/git/gh tool-loop), `git`, and `gh`. The
+# CONFINEMENT is NOT in this image — it is the `docker run` flags in cage/cage.mjs
+# (cap-drop ALL, --user 1000, --read-only, --internal net, egress proxy), proven by
+# cage/escape-probe.sh. So this image is deliberately minimal and carries NO secret:
+# the repo-scoped GH token and the inference token are forwarded key-only at RUN
+# time (run-cage.mjs → CAGE_GH_TOKEN / CAGE_CLAUDE_TOKEN), never baked into a layer.
+#
+# DELIBERATELY NO `USER` line — the cage forces `--user 1000:1000` itself (cage.mjs
+# CAGE_UID_GID), so non-root holds regardless of image hygiene, exactly as the root
+# probe image proves. The npm global install lands world-readable under
+# /usr/local, so uid 1000 can run `claude` without owning it.
+#
+# Built ON the box at provisioning time (arm64). Build needs egress (npm + apt);
+# the cage's no-egress is a runtime property, not a build one.
+#
+#   docker build -f cage/Dockerfile.agent -t self-healer-agent:latest cage/
+#
+# Wired in via:  HEALER_CAGE_AGENT_CMD="node /opt/self-healer/agent-entrypoint.mjs"
+FROM node:22-bookworm-slim
+
+# git + gh (the agent commits/pushes/opens the PR) + curl/gnupg for the gh apt repo
+# + ca-certificates so TLS through the egress proxy validates.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates git gnupg \
+ && mkdir -p -m 755 /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+
+# The Claude Code CLI — installed global so it's world-readable (uid 1000 runs it).
+RUN npm install -g @anthropic-ai/claude-code \
+ && npm cache clean --force
+
+# The entrypoint logic (version-controlled in the repo, baked read-only here).
+COPY agent-entrypoint.mjs /opt/self-healer/agent-entrypoint.mjs
+
+WORKDIR /work
+# Default command for standalone use; run-cage.mjs passes HEALER_CAGE_AGENT_CMD
+# explicitly, which overrides this.
+CMD ["node", "/opt/self-healer/agent-entrypoint.mjs"]

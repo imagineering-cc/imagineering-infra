@@ -30,17 +30,21 @@ const TELEGRAM_MAX = 4096; // Telegram's hard message-length limit.
 // Known secret PREFIXES — the first line of defence (cheap, precise). NOT the
 // only line: the generic rules below catch the shapes a prefix list can't.
 const KNOWN_SECRET_PATTERNS = [
-  [/\bsk-ant-[a-zA-Z0-9_-]{6,}/g, '<redacted:anthropic-key>'],
-  [/\b(?:github_pat|gh[posru])_[A-Za-z0-9_]{16,}/g, '<redacted:github-token>'],
-  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '<redacted:slack-token>'],
-  [/\bAIza[A-Za-z0-9_-]{20,}/g, '<redacted:google-key>'],
-  [/\bsk-(?:proj-)?[A-Za-z0-9]{20,}/g, '<redacted:openai-key>'],
-  [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, '<redacted:stripe-key>'],
-  [/\bxkeysib-[A-Za-z0-9]{16,}/g, '<redacted:brevo-key>'],
-  [/\bAKIA[0-9A-Z]{16}\b/g, '<redacted:aws-key-id>'],
-  [/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/g, '<redacted:bearer>'],
-  [/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/g, '<redacted:jwt>'],
-  [/-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, '<redacted:private-key>'],
+  // Markers use SQUARE brackets, not angle, so they are HTML-safe: scrubbing may run
+  // AFTER a field is HTML-escaped (sendNotify scrubs the final message), and an
+  // angle-bracket marker would reintroduce raw <…> and break Telegram HTML parse_mode
+  // (cage-match #122, Carnot).
+  [/\bsk-ant-[a-zA-Z0-9_-]{6,}/g, '[redacted:anthropic-key]'],
+  [/\b(?:github_pat|gh[posru])_[A-Za-z0-9_]{16,}/g, '[redacted:github-token]'],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '[redacted:slack-token]'],
+  [/\bAIza[A-Za-z0-9_-]{20,}/g, '[redacted:google-key]'],
+  [/\bsk-(?:proj-)?[A-Za-z0-9]{20,}/g, '[redacted:openai-key]'],
+  [/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, '[redacted:stripe-key]'],
+  [/\bxkeysib-[A-Za-z0-9]{16,}/g, '[redacted:brevo-key]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted:aws-key-id]'],
+  [/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/g, '[redacted:bearer]'],
+  [/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/g, '[redacted:jwt]'],
+  [/-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, '[redacted:private-key]'],
 ];
 
 /**
@@ -65,17 +69,17 @@ export function scrubSecrets(text) {
   // 2. sensitive key=value / key: value (preserve the key name, redact value).
   out = out.replace(
     /\b(pass(?:word|wd)?|secret|api[_-]?key|apikey|client[_-]?secret|access[_-]?key|auth(?:orization)?|token)\b(\s*[=:]\s*)('?"?)[^\s'"]+/gi,
-    (_m, key, sep) => `${key}${sep}<redacted>`,
+    (_m, key, sep) => `${key}${sep}[redacted]`,
   );
   // 3. high-entropy catch-all: any 32+ char run of credential-alphabet chars.
-  out = out.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g, '<redacted:high-entropy>');
+  out = out.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g, '[redacted:high-entropy]');
   return out;
 }
 
 /** Escape the five HTML metacharacters so dynamic text can't break out of (or
  * inject into) the Telegram HTML parse_mode — including quotes, so the markup
  * stays safe if an attribute-bearing tag is ever added. */
-function esc(text) {
+export function esc(text) {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -162,23 +166,38 @@ export function passesCooldown(verdict, nowMs) {
 export async function pingIfNoteworthy(verdict, nowMs = Date.now()) {
   if (verdict.overallTier === 'green') return { pinged: false, reason: 'green — nothing to report' };
   if (process.env.HEALER_NO_PING === '1') return { pinged: false, reason: 'disabled via HEALER_NO_PING' };
-
-  const apiKey = process.env.NOTIFY_API_KEY;
-  if (!apiKey) return { pinged: false, reason: 'no NOTIFY_API_KEY configured' };
-
+  if (!process.env.NOTIFY_API_KEY) return { pinged: false, reason: 'no NOTIFY_API_KEY configured' };
   if (!passesCooldown(verdict, nowMs)) return { pinged: false, reason: 'cooldown — same problem set recently pinged' };
 
-  const url = resolveNotifyUrl();
-  const message = formatVerdict(verdict);
-  const res = await fetch(url, {
+  const { sent, reason } = await sendNotify(formatVerdict(verdict));
+  return sent ? { pinged: true } : { pinged: false, reason };
+}
+
+/**
+ * Send a raw message to Nick via the notify proxy. Scrubs secrets + caps to
+ * Telegram's length limit. A SILENT no-op (sent:false) when NOTIFY_API_KEY is
+ * unset, so a dev run never errors and an unconfigured box never throws. Used for
+ * green-auto lifecycle pings (PR opened / failed) where there is no verdict —
+ * `pingIfNoteworthy` delegates its actual POST here too. Respects HEALER_NO_PING.
+ * @param {string} message  may contain attacker-influenceable diagnosis text → scrubbed
+ * @param {{parseMode?: string}} [opts]
+ * @returns {Promise<{sent: boolean, reason?: string}>}
+ */
+export async function sendNotify(message, { parseMode = 'HTML' } = {}) {
+  if (process.env.HEALER_NO_PING === '1') return { sent: false, reason: 'disabled via HEALER_NO_PING' };
+  const apiKey = process.env.NOTIFY_API_KEY;
+  if (!apiKey) return { sent: false, reason: 'no NOTIFY_API_KEY configured' };
+
+  const safe = scrubSecrets(String(message ?? '')).slice(0, TELEGRAM_MAX);
+  const res = await fetch(resolveNotifyUrl(), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ message, parse_mode: 'HTML' }),
+    body: JSON.stringify({ message: safe, parse_mode: parseMode }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`notify /send failed (${res.status}): ${body.slice(0, 200)}`);
   }
-  return { pinged: true };
+  return { sent: true };
 }
