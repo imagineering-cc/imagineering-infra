@@ -56,6 +56,9 @@ services:
       # (it's also fine to lose — ascend re-delivers every morning — but a same-day restart keeps it).
       - ASCEND_INGEST_KEY=${ASCEND_INGEST_KEY:-}
       - ASCEND_NIGHT_FILE=/data/last-night.json
+      # Second password scoping a session to "ascend" — unlocks the DF that knows last night
+      # (AUTH_PASSWORD alone gives plain "base" DF, blind to it). See server.js /auth/login.
+      - ASCEND_PASSWORD=${ASCEND_PASSWORD:-}
     volumes:
       - embodied-dreamfinder-data:/data
       - /home/nick/whisper.cpp/build/bin:/opt/whisper/bin:ro
