@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified backup script for all services
 # Dumps databases/data, pushes to GitHub (imagineering-cc/imagineering-backups)
-# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity]
+# Usage: ./backup.sh [all|kanbn|outline|radicale|pm-bot|claudius|aiko-island|matrix|continuwuity]
 #
 # NOTE: downstream-server's DB backup moved to the downstream repo
 # (nickmeinhold/downstream deploy/oci/scripts/backup-downstream.sh, cron
@@ -187,7 +187,7 @@ backup_matrix() {
   log "Matrix backup complete"
 }
 
-# aiko-chat-gateway: the gateway's local SQLite store is the SOLE copy of message
+# aiko-chat-island: the island's local SQLite store is the SOLE copy of message
 # history + auth credentials + the ACL/membership overlay. Per the #1281
 # HyperSpace-source-of-truth redesign, HyperSpace holds only channel/user
 # EXISTENCE; everything else lives in this one file on the named volume. A
@@ -196,18 +196,18 @@ backup_matrix() {
 # like the matrix bridges — mount the volume read-only into sqlite-dumper and
 # `.dump` to text SQL (git-diffable). Online-safe: `.dump` reads a consistent
 # snapshot; the read-only mount can't perturb the live DB.
-backup_aiko_gateway() {
-  log "Backing up aiko-chat-gateway..."
+backup_aiko_island() {
+  log "Backing up aiko-chat-island..."
 
-  local tmp="$BACKUP_DIR/aiko-gateway-$DATE.sql"
-  local err="$BACKUP_DIR/aiko-gateway-$DATE.err"
-  local out="$BACKUP_DIR/aiko-gateway-$DATE.sql.gz"
+  local tmp="$BACKUP_DIR/aiko-island-$DATE.sql"
+  local err="$BACKUP_DIR/aiko-island-$DATE.err"
+  local out="$BACKUP_DIR/aiko-island-$DATE.sql.gz"
 
   # Dump to a PLAIN .sql first (no pipe) so sqlite3's REAL exit is seen — piping
   # to gzip would mask it behind gzip's status (and a gzip of empty input is
   # still a non-empty container, so an `-s` size check on the .gz lies). Capture
   # stderr for the error message (a WAL-locked read fails loudly, not silently).
-  # Derive the live gateway volume from the RUNNING container rather than
+  # Derive the live island volume from the RUNNING container rather than
   # hardcoding it. The island cutover (project aiko-chat-gateway + volume
   # aiko-chat-gateway_aiko_gateway_data -> project aiko + external volume
   # aiko_data) silently ORPHANED the old volume, so a hardcoded name backed up
@@ -219,20 +219,20 @@ backup_aiko_gateway() {
   gw_cid=$(docker ps --format '{{.Names}}\t{{.Image}}' \
     | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
   if [ -z "$gw_cid" ]; then
-    error "aiko-gateway: no running gateway container (image aiko-chat-island|gateway:*)"
+    error "aiko-island: no running island container (image aiko-chat-island|gateway:*)"
     return 1
   fi
   gw_vol=$(docker inspect "$gw_cid" \
     --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
   if [ -z "$gw_vol" ]; then
-    error "aiko-gateway: container $gw_cid has no /data volume mount"
+    error "aiko-island: container $gw_cid has no /data volume mount"
     return 1
   fi
-  log "  live gateway volume: $gw_vol (container $gw_cid)"
+  log "  live island volume: $gw_vol (container $gw_cid)"
 
   if ! docker run --rm -v "${gw_vol}:/data:ro" sqlite-dumper:latest \
        sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump > "$tmp" 2>"$err"; then
-    error "aiko-gateway sqlite3 .dump failed: $(tr '\n' ' ' < "$err")"
+    error "aiko-island sqlite3 .dump failed: $(tr '\n' ' ' < "$err")"
     rm -f "$tmp" "$err"
     return 1
   fi
@@ -244,13 +244,13 @@ backup_aiko_gateway() {
   local lastline
   lastline=$(grep -ve '^[[:space:]]*$' "$tmp" | tail -n1)
   if [ "$lastline" != "COMMIT;" ]; then
-    error "aiko-gateway dump invalid (last line '$lastline', not COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
+    error "aiko-island dump invalid (last line '$lastline', not COMMIT; — empty/truncated): $(tr '\n' ' ' < "$err")"
     rm -f "$tmp" "$err"
     return 1
   fi
   rm -f "$err"
-  gzip -f "$tmp"   # -> $out (aiko-gateway-$DATE.sql.gz)
-  log "aiko-gateway backup complete: $(basename "$out") ($(du -h "$out" | cut -f1))"
+  gzip -f "$tmp"   # -> $out (aiko-island-$DATE.sql.gz)
+  log "aiko-island backup complete: $(basename "$out") ($(du -h "$out" | cut -f1))"
 }
 
 # Triggers Continuwuity's online RocksDB checkpoint via the admin API
@@ -523,7 +523,7 @@ cleanup_old_backups() {
 case $SERVICE in
   all)
     SUCCEEDED=()
-    for svc in kanbn outline radicale pm-bot claudius aiko-gateway; do
+    for svc in kanbn outline radicale pm-bot claudius aiko-island; do
       if "backup_${svc//-/_}"; then
         SUCCEEDED+=("$svc")
       else
@@ -575,8 +575,8 @@ case $SERVICE in
   claudius)
     backup_claudius && backup_to_github claudius || FAILED_SERVICES+=(claudius)
     ;;
-  aiko-gateway)
-    backup_aiko_gateway && backup_to_github aiko-gateway || FAILED_SERVICES+=(aiko-gateway)
+  aiko-island)
+    backup_aiko_island && backup_to_github aiko-island || FAILED_SERVICES+=(aiko-island)
     ;;
   matrix)
     if backup_matrix; then
@@ -594,7 +594,7 @@ case $SERVICE in
     cleanup_old_backups
     ;;
   *)
-    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|aiko-gateway|matrix|continuwuity|cleanup]"
+    echo "Usage: $0 [all|kanbn|outline|radicale|pm-bot|claudius|aiko-island|matrix|continuwuity|cleanup]"
     exit 1
     ;;
 esac

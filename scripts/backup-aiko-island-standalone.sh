@@ -1,25 +1,25 @@
 #!/bin/bash
-# Standalone aiko-chat-gateway DB backup for a SINGLE-SERVICE island box
+# Standalone aiko-chat-island DB backup for a SINGLE-SERVICE island box
 # (e.g. the enspyr / Melbourne OCI box), which does NOT run the full fleet
-# backup.sh. Dumps the gateway's SQLite DB and pushes it to the shared backup
+# backup.sh. Dumps the island's SQLite DB and pushes it to the shared backup
 # repo (imagineering-cc/imagineering-backups) under a per-island slug so two
 # islands never clobber one file.
 #
-# Usage:  backup-aiko-gateway-standalone.sh <slug>
-#   e.g.  backup-aiko-gateway-standalone.sh aiko-gateway-enspyr
+# Usage:  backup-aiko-island-standalone.sh <slug>
+#   e.g.  backup-aiko-island-standalone.sh aiko-island-enspyr
 #
 # Requires: docker (run as root or a docker-group user), git, and a deploy key
 # with WRITE on the backup repo at ~/.ssh/imagineering-backups-deploy plus the
 # ssh host alias `github-imagineering-backups` (see the deploy notes / #1577).
 #
-# Mirrors the fleet backup.sh's aiko-gateway logic: auto-detect the live volume
+# Mirrors the fleet backup.sh's aiko-island logic: auto-detect the live volume
 # (survives the island cutover), .dump to text SQL (git-diffable), validate the
 # dump ends in COMMIT; (a truncated dump is worse than none — restore replays it
 # over the SOLE live DB), then pull --rebase + push (staggered from the Sydney
 # 4am cron to avoid a push race on the shared repo).
 set -euo pipefail
 
-SLUG="${1:?usage: $0 <slug>  e.g. aiko-gateway-enspyr}"
+SLUG="${1:?usage: $0 <slug>  e.g. aiko-island-enspyr}"
 DATE=$(date +%Y-%m-%d)
 BACKUP_DIR="/tmp/backups"
 GITHUB_BACKUP_REPO="git@github-imagineering-backups:imagineering-cc/imagineering-backups.git"
@@ -29,19 +29,19 @@ mkdir -p "$BACKUP_DIR"
 log()   { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 fail()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2; exit 1; }
 
-# --- Locate the LIVE gateway volume from the running container -----------------
+# --- Locate the LIVE island volume from the running container -----------------
 # Hardcoding the volume name silently backs up a ghost after a compose/project
 # cutover renames it (that bug bit Sydney — see fleet backup.sh). Derive it.
 GW_CID=$(docker ps --format '{{.Names}}\t{{.Image}}' \
   | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
-[ -n "$GW_CID" ] || fail "no running gateway container (image aiko-chat-island|gateway:*)"
+[ -n "$GW_CID" ] || fail "no running island container (image aiko-chat-island|gateway:*)"
 GW_VOL=$(docker inspect "$GW_CID" \
   --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
 [ -n "$GW_VOL" ] || fail "container $GW_CID has no /data volume mount"
-log "live gateway volume: $GW_VOL (container $GW_CID)"
+log "live island volume: $GW_VOL (container $GW_CID)"
 
 # --- Dump (online-safe: read-only mount, .dump reads a consistent snapshot) ----
-# The gateway image ships no sqlite3, so mount the volume read-only into a small
+# The island image ships no sqlite3, so mount the volume read-only into a small
 # alpine+sqlite image. Build it once if absent (idempotent).
 if ! docker image inspect sqlite-dumper:latest >/dev/null 2>&1; then
   log "building sqlite-dumper:latest (alpine + sqlite3)"
