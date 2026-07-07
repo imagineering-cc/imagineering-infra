@@ -207,7 +207,30 @@ backup_aiko_gateway() {
   # to gzip would mask it behind gzip's status (and a gzip of empty input is
   # still a non-empty container, so an `-s` size check on the .gz lies). Capture
   # stderr for the error message (a WAL-locked read fails loudly, not silently).
-  if ! docker run --rm -v "aiko-chat-gateway_aiko_gateway_data:/data:ro" sqlite-dumper:latest \
+  # Derive the live gateway volume from the RUNNING container rather than
+  # hardcoding it. The island cutover (project aiko-chat-gateway + volume
+  # aiko-chat-gateway_aiko_gateway_data -> project aiko + external volume
+  # aiko_data) silently ORPHANED the old volume, so a hardcoded name backed up
+  # a frozen ghost for days (caught 2026-07-07: Sydney's daily dump had
+  # passkey_credentials=0 while the live DB had 1). Auto-detect removes that
+  # drift class and works on BOTH islands regardless of cutover state (Melbourne
+  # still runs the pre-cutover volume name).
+  local gw_cid gw_vol
+  gw_cid=$(docker ps --format '{{.Names}}\t{{.Image}}' \
+    | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
+  if [ -z "$gw_cid" ]; then
+    error "aiko-gateway: no running gateway container (image aiko-chat-island|gateway:*)"
+    return 1
+  fi
+  gw_vol=$(docker inspect "$gw_cid" \
+    --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
+  if [ -z "$gw_vol" ]; then
+    error "aiko-gateway: container $gw_cid has no /data volume mount"
+    return 1
+  fi
+  log "  live gateway volume: $gw_vol (container $gw_cid)"
+
+  if ! docker run --rm -v "${gw_vol}:/data:ro" sqlite-dumper:latest \
        sqlite3 -cmd '.timeout 5000' /data/aiko.db .dump > "$tmp" 2>"$err"; then
     error "aiko-gateway sqlite3 .dump failed: $(tr '\n' ' ' < "$err")"
     rm -f "$tmp" "$err"
