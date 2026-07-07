@@ -2,7 +2,7 @@
 # Restore script for all services
 # Restores from GitHub backup repo (imagineering-cc/imagineering-backups)
 # Usage: ./restore.sh <service>
-#   service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity
+#   service: kanbn, outline, radicale, pm-bot, claudius, aiko-island, matrix, continuwuity
 #
 # Note: continuwuity requires the age private key path in $AGE_IDENTITY_FILE
 # (default: ~/.config/sops/age/keys.txt — same file SOPS uses; age will try
@@ -30,7 +30,7 @@ AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/
 
 if [ -z "$SERVICE" ]; then
   echo "Usage: $0 <service>"
-  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
+  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-island, matrix, continuwuity"
   echo ""
   echo "Examples:"
   echo "  $0 kanbn         # Restore latest from GitHub backup"
@@ -199,40 +199,40 @@ restore_claudius() {
   log "Claudius restore complete!"
 }
 
-# Restore the aiko-chat-gateway SQLite store from the latest .sql dump in the
+# Restore the aiko-chat-island SQLite store from the latest .sql dump in the
 # backup repo. Mirrors the matrix-bridge sqlite restore: stop the container
 # (never replay against a live DB), replace the DB from the dump inside the
 # sqlite-dumper image (rw mount), restart. The dump carries the current schema
-# (email col, nullable password_hash, social_identities), so the gateway's boot
+# (email col, nullable password_hash, social_identities), so the island's boot
 # schema guard passes after restore. aiko_chat_gateway#4.
-restore_aiko_gateway() {
-  log "Restoring aiko-chat-gateway..."
+restore_aiko_island() {
+  log "Restoring aiko-chat-island..."
 
   fetch_backups
 
-  local sql_file="$BACKUP_CLONE_DIR/aiko-gateway.sql"
+  local sql_file="$BACKUP_CLONE_DIR/aiko-island.sql"
   # Validate the dump BEFORE touching anything: present, non-empty, and complete
-  # (a COMPLETE sqlite .dump ends with COMMIT;). The gateway DB is the SOLE copy
+  # (a COMPLETE sqlite .dump ends with COMMIT;). The island DB is the SOLE copy
   # of auth+messages+ACL, so a bad dump must never reach the destructive path.
   if [ ! -s "$sql_file" ]; then
-    error "No (non-empty) aiko-gateway.sql in backup repo"; cleanup_backups; exit 1
+    error "No (non-empty) aiko-island.sql in backup repo"; cleanup_backups; exit 1
   fi
   # End-anchored completeness check (see backup.sh): the LAST non-blank line of a
   # complete sqlite .dump is exactly `COMMIT;`. A whole-file grep could be fooled
   # by `COMMIT;` embedded in multiline data, accepting a truncated dump.
   if [ "$(grep -ve '^[[:space:]]*$' "$sql_file" | tail -n1)" != "COMMIT;" ]; then
-    error "aiko-gateway.sql looks truncated/invalid (last line is not COMMIT;)"; cleanup_backups; exit 1
+    error "aiko-island.sql looks truncated/invalid (last line is not COMMIT;)"; cleanup_backups; exit 1
   fi
 
   # Irreversible: replacing the sole auth+message store. Require typed consent.
-  echo "WARNING: this REPLACES the gateway's SOLE database (all accounts + messages + ACL)."
+  echo "WARNING: this REPLACES the island's SOLE database (all accounts + messages + ACL)."
   echo "  dump: $sql_file ($(wc -l < "$sql_file") lines, $(du -h "$sql_file" | cut -f1))"
-  read -r -p "Type 'restore aiko-gateway' to proceed: " confirm
-  if [ "$confirm" != "restore aiko-gateway" ]; then
+  read -r -p "Type 'restore aiko-island' to proceed: " confirm
+  if [ "$confirm" != "restore aiko-island" ]; then
     error "Aborted (no confirmation)"; cleanup_backups; exit 1
   fi
 
-  log "Stopping gateway..."
+  log "Stopping island..."
   cd ~/apps/aiko-chat-gateway
   docker compose stop
 
@@ -269,17 +269,17 @@ restore_aiko_gateway() {
         #    neither. If it fails, the live aiko.db is still the old one.
         mv -f /data/aiko.db.restore /data/aiko.db
       ' < "$sql_file"; then
-    error "aiko-gateway restore FAILED. The candidate was rejected before the final install in almost all cases, so the live aiko.db is the original; a complete rescue copy (aiko.db.rescue-*) is also in the volume. Inspect the volume before retrying. Restarting on the current DB."
+    error "aiko-island restore FAILED. The candidate was rejected before the final install in almost all cases, so the live aiko.db is the original; a complete rescue copy (aiko.db.rescue-*) is also in the volume. Inspect the volume before retrying. Restarting on the current DB."
     docker compose up -d
     cleanup_backups
     exit 1
   fi
 
-  log "Restored OK (previous DB kept in the volume as $rescue). Restarting gateway..."
+  log "Restored OK (previous DB kept in the volume as $rescue). Restarting island..."
   docker compose up -d
 
   cleanup_backups
-  log "aiko-gateway restore complete!"
+  log "aiko-island restore complete!"
 }
 
 # Restore matrix bridges + relay-bot SQLite DBs from latest SQL dumps in the
@@ -434,8 +434,8 @@ case $SERVICE in
   claudius)
     restore_claudius
     ;;
-  aiko-gateway)
-    restore_aiko_gateway
+  aiko-island)
+    restore_aiko_island
     ;;
   matrix)
     restore_matrix
@@ -445,7 +445,7 @@ case $SERVICE in
     ;;
   *)
     error "Unknown service: $SERVICE"
-    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, aiko-gateway, matrix, continuwuity"
+    echo "Valid services: kanbn, outline, radicale, pm-bot, claudius, aiko-island, matrix, continuwuity"
     exit 1
     ;;
 esac
