@@ -11,7 +11,18 @@ All services backup to **GitHub** (imagineering-cc/imagineering-backups).
 | Radicale | CalDAV/CardDAV collections | Daily 4 AM | 7 days |
 | Dreamfinder | SQLite database | Daily 4 AM | 7 days |
 | Claudius | Agent state files | Daily 4 AM | 7 days |
-| aiko-chat-gateway | SQLite (messages + auth + ACL — the sole copy) | Daily 4 AM | 7 days |
+| aiko-chat-gateway (Sydney / imagineering) | SQLite (messages + auth + ACL — the sole copy) | Daily 4 AM | 7 days |
+| aiko-chat-gateway (Melbourne / enspyr) | SQLite (`aiko-gateway-enspyr.sql`) | Daily 4:20 AM | 7 days |
+
+> **Two islands, one repo.** Each island's gateway backs up its own DB under a
+> distinct slug so they never clobber one file: Sydney → `aiko-gateway.sql`
+> (fleet `backup.sh` on the imagineering box), Melbourne → `aiko-gateway-enspyr.sql`
+> (standalone `backup-aiko-gateway-standalone.sh` on nick-mel, own on-box deploy
+> key, root cron 4:20 AM staggered from Sydney's 4 AM to avoid a push race).
+> Both auto-detect the live gateway volume from the running container — a
+> hardcoded name silently backs up an orphaned volume after an island cutover
+> (fixed 2026-07-07; see PR #124). **Follow-up:** Melbourne has no backup-recency
+> watcher yet (Sydney does) — a silent failure there would go unnoticed.
 
 ## Manual Operations
 
