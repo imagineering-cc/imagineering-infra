@@ -420,14 +420,21 @@ deploy_familiars_server() {
 deploy_backups() {
     echo "Deploying backup configuration..."
 
-    # Deploy backup scripts
-    echo "Deploying backup scripts..."
-    ssh "$REMOTE" "sudo mkdir -p /opt/scripts"
+    # Deploy backup scripts + the lib/ helpers they source. backup.sh and
+    # restore.sh do `. "$SCRIPT_DIR/lib/{telegram,aiko-volume}.sh"` at runtime,
+    # so the lib dir MUST land alongside them: a sourced-but-missing lib aborts
+    # the script, and for the 04:00 backup cron that is a SILENT daily-backup
+    # failure — the exact ghost class #1759 fixed, reintroduced via the deploy
+    # path. Copy the WHOLE lib/ dir so new helpers are covered automatically
+    # (no per-file drift). rsync into a staging dir, then sudo-install.
+    echo "Deploying backup scripts + lib helpers..."
+    ssh "$REMOTE" "sudo mkdir -p /opt/scripts/lib"
     scp "$REPO_ROOT/scripts/backup.sh" "$REMOTE":/tmp/backup.sh
     scp "$REPO_ROOT/scripts/restore.sh" "$REMOTE":/tmp/restore.sh
-    ssh "$REMOTE" "sudo mv /tmp/backup.sh /tmp/restore.sh /opt/scripts/"
-    ssh "$REMOTE" "sudo chmod +x /opt/scripts/backup.sh /opt/scripts/restore.sh"
-    ssh "$REMOTE" "sudo chown nick:nick /opt/scripts/*.sh"
+    rsync -az "$REPO_ROOT/scripts/lib/" "$REMOTE":/tmp/scripts-lib/
+    ssh "$REMOTE" "sudo mv /tmp/backup.sh /tmp/restore.sh /opt/scripts/ && sudo cp /tmp/scripts-lib/*.sh /opt/scripts/lib/ && rm -rf /tmp/scripts-lib"
+    ssh "$REMOTE" "sudo chmod +x /opt/scripts/backup.sh /opt/scripts/restore.sh /opt/scripts/lib/*.sh"
+    ssh "$REMOTE" "sudo chown nick:nick /opt/scripts/*.sh /opt/scripts/lib/*.sh"
 
     # Ensure cron is installed and running
     if ! ssh "$REMOTE" "systemctl is-active cron > /dev/null 2>&1"; then
