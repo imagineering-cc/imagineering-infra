@@ -29,15 +29,17 @@ mkdir -p "$BACKUP_DIR"
 log()   { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 fail()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2; exit 1; }
 
+# Shared live-volume discovery (single home for the invariant — see fleet
+# backup.sh; the ghost-volume history is documented in lib/aiko-volume.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/aiko-volume.sh
+. "$SCRIPT_DIR/lib/aiko-volume.sh"
+
 # --- Locate the LIVE island volume from the running container -----------------
 # Hardcoding the volume name silently backs up a ghost after a compose/project
-# cutover renames it (that bug bit Sydney — see fleet backup.sh). Derive it.
-GW_CID=$(docker ps --format '{{.Names}}\t{{.Image}}' \
-  | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
-[ -n "$GW_CID" ] || fail "no running island container (image aiko-chat-island|gateway:*)"
-GW_VOL=$(docker inspect "$GW_CID" \
-  --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
-[ -n "$GW_VOL" ] || fail "container $GW_CID has no /data volume mount"
+# cutover renames it (that bug bit Sydney). Derive it from the live container.
+GW_CID=$(aiko_island_container) || fail "no running island container (image aiko-chat-island|gateway:*)"
+GW_VOL=$(aiko_island_volume "$GW_CID") || fail "container $GW_CID has no /data volume mount"
 log "live island volume: $GW_VOL (container $GW_CID)"
 
 # --- Dump (online-safe: read-only mount, .dump reads a consistent snapshot) ----

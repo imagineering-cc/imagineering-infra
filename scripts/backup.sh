@@ -47,6 +47,10 @@ error() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/telegram.sh
 . "$SCRIPT_DIR/lib/telegram.sh"
+# Live island volume/container discovery — single home for the invariant so
+# backup and restore can't drift apart (aiko_chat_gateway#1759).
+# shellcheck source=lib/aiko-volume.sh
+. "$SCRIPT_DIR/lib/aiko-volume.sh"
 
 check_repo_size() {
   if [ ! -d "$GITHUB_BACKUP_DIR" ]; then
@@ -208,26 +212,13 @@ backup_aiko_island() {
   # still a non-empty container, so an `-s` size check on the .gz lies). Capture
   # stderr for the error message (a WAL-locked read fails loudly, not silently).
   # Derive the live island volume from the RUNNING container rather than
-  # hardcoding it. The island cutover (project aiko-chat-gateway + volume
-  # aiko-chat-gateway_aiko_gateway_data -> project aiko + external volume
-  # aiko_data) silently ORPHANED the old volume, so a hardcoded name backed up
-  # a frozen ghost for days (caught 2026-07-07: Sydney's daily dump had
-  # passkey_credentials=0 while the live DB had 1). Auto-detect removes that
-  # drift class and works on BOTH islands regardless of cutover state (Melbourne
-  # still runs the pre-cutover volume name).
+  # hardcoding it (see lib/aiko-volume.sh for the full ghost-volume history).
+  # Auto-detect follows the island cutover automatically and works on BOTH
+  # islands regardless of cutover state (Melbourne still runs the pre-cutover
+  # volume name).
   local gw_cid gw_vol
-  gw_cid=$(docker ps --format '{{.Names}}\t{{.Image}}' \
-    | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
-  if [ -z "$gw_cid" ]; then
-    error "aiko-island: no running island container (image aiko-chat-island|gateway:*)"
-    return 1
-  fi
-  gw_vol=$(docker inspect "$gw_cid" \
-    --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
-  if [ -z "$gw_vol" ]; then
-    error "aiko-island: container $gw_cid has no /data volume mount"
-    return 1
-  fi
+  gw_cid=$(aiko_island_container) || return 1
+  gw_vol=$(aiko_island_volume "$gw_cid") || return 1
   log "  live island volume: $gw_vol (container $gw_cid)"
 
   if ! docker run --rm -v "${gw_vol}:/data:ro" sqlite-dumper:latest \

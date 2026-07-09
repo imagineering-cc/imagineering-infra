@@ -12,7 +12,7 @@
 
 set -e
 
-SERVICE=$1
+SERVICE=${1:-}   # may be unset when sourced by the test harness (set -u safe)
 RESTORE_DIR="/tmp/restore"
 GITHUB_BACKUP_REPO="git@github-imagineering-backups:imagineering-cc/imagineering-backups.git"
 BACKUP_CLONE_DIR="$RESTORE_DIR/imagineering-backups"
@@ -28,19 +28,16 @@ error() { echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2; }
 
 AGE_IDENTITY_FILE="${AGE_IDENTITY_FILE:-${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}}"
 
-if [ -z "$SERVICE" ]; then
-  echo "Usage: $0 <service>"
-  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-island, matrix, continuwuity"
-  echo ""
-  echo "Examples:"
-  echo "  $0 kanbn         # Restore latest from GitHub backup"
-  echo "  $0 outline       # Restore latest from GitHub backup"
-  echo "  $0 matrix        # Restore all matrix bridges + relay-bots"
-  echo "  $0 continuwuity  # Restore homeserver (requires AGE_IDENTITY_FILE)"
-  exit 1
-fi
+# Live island volume/container discovery — the SAME single home backup.sh uses,
+# so restore can never again drift back to a hardcoded (ghost) volume name
+# (aiko_chat_gateway#1759). test-restore-aiko-island.sh sources this file with
+# RESTORE_LIB_ONLY=1 to exercise _restore_island_core against a temp volume.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/aiko-volume.sh
+. "$SCRIPT_DIR/lib/aiko-volume.sh"
 
-mkdir -p "$RESTORE_DIR"
+# Usage check + dispatch are deferred to the guarded tail so the test harness
+# can source this file (RESTORE_LIB_ONLY=1) without triggering the arg check.
 
 # Clone the backup repo (shallow) to get latest backups
 fetch_backups() {
@@ -199,42 +196,48 @@ restore_claudius() {
   log "Claudius restore complete!"
 }
 
-# Restore the aiko-chat-island SQLite store from the latest .sql dump in the
-# backup repo. Mirrors the matrix-bridge sqlite restore: stop the container
-# (never replay against a live DB), replace the DB from the dump inside the
-# sqlite-dumper image (rw mount), restart. The dump carries the current schema
-# (email col, nullable password_hash, social_identities), so the island's boot
-# schema guard passes after restore. aiko_chat_gateway#4.
-restore_aiko_island() {
-  log "Restoring aiko-chat-island..."
+# Core island restore: replace aiko.db in volume $vol from $sql_file, stopping
+# then starting container $cid around the swap. NO prompt, NO git fetch — this
+# is the unit test-restore-aiko-island.sh drives against a throwaway volume, so
+# the CI test exercises the REAL install logic rather than a copy of it. Only
+# the gateway container (the one mounting /data) is stopped — the broker/
+# registrar never touch aiko.db, so a `docker stop <cid>` is more surgical than
+# the old `docker compose stop` (less downtime) and needs no compose dir.
+# Returns non-zero on any failure; the live aiko.db is intact in almost all
+# failure paths (candidate is validated before the atomic install).
+#
+# Ordering that matters: validate dump -> stop container -> rescue+install ->
+# start container. The dump carries the current schema (email col, nullable
+# password_hash, social_identities), so the island's boot schema guard passes
+# after restore. aiko_chat_gateway#4 / #1759.
+_restore_island_core() {
+  local sql_file=$1 cid=$2 vol=$3
 
-  fetch_backups
-
-  local sql_file="$BACKUP_CLONE_DIR/aiko-island.sql"
   # Validate the dump BEFORE touching anything: present, non-empty, and complete
   # (a COMPLETE sqlite .dump ends with COMMIT;). The island DB is the SOLE copy
   # of auth+messages+ACL, so a bad dump must never reach the destructive path.
   if [ ! -s "$sql_file" ]; then
-    error "No (non-empty) aiko-island.sql in backup repo"; cleanup_backups; exit 1
+    error "No (non-empty) dump at $sql_file"; return 1
   fi
   # End-anchored completeness check (see backup.sh): the LAST non-blank line of a
   # complete sqlite .dump is exactly `COMMIT;`. A whole-file grep could be fooled
   # by `COMMIT;` embedded in multiline data, accepting a truncated dump.
   if [ "$(grep -ve '^[[:space:]]*$' "$sql_file" | tail -n1)" != "COMMIT;" ]; then
-    error "aiko-island.sql looks truncated/invalid (last line is not COMMIT;)"; cleanup_backups; exit 1
+    error "dump looks truncated/invalid (last line is not COMMIT;)"; return 1
   fi
 
-  # Irreversible: replacing the sole auth+message store. Require typed consent.
-  echo "WARNING: this REPLACES the island's SOLE database (all accounts + messages + ACL)."
-  echo "  dump: $sql_file ($(wc -l < "$sql_file") lines, $(du -h "$sql_file" | cut -f1))"
-  read -r -p "Type 'restore aiko-island' to proceed: " confirm
-  if [ "$confirm" != "restore aiko-island" ]; then
-    error "Aborted (no confirmation)"; cleanup_backups; exit 1
+  # The island image ships no sqlite3; build the tiny alpine+sqlite helper if
+  # absent (idempotent — mirrors backup-aiko-island-standalone.sh) so restore
+  # works on a box where the backup path has never run.
+  if ! docker image inspect sqlite-dumper:latest >/dev/null 2>&1; then
+    log "Building sqlite-dumper:latest (alpine + sqlite3)..."
+    printf 'FROM alpine:3.20\nRUN apk add --no-cache sqlite\n' \
+      | docker build -q -t sqlite-dumper:latest - >/dev/null \
+      || { error "failed to build sqlite-dumper:latest"; return 1; }
   fi
 
-  log "Stopping island..."
-  cd ~/apps/aiko-chat-gateway
-  docker compose stop
+  log "Stopping island container $cid..."
+  docker stop "$cid" >/dev/null || { error "failed to stop container $cid"; return 1; }
 
   # Build + validate the candidate in a TEMP file, and only swap it in on
   # success — the live aiko.db is untouched until a valid replacement exists.
@@ -242,7 +245,7 @@ restore_aiko_island() {
   local rescue
   rescue="aiko.db.rescue-$(date +%Y%m%d-%H%M%S)"
   log "Building + validating candidate DB (live DB untouched until it passes)..."
-  if ! docker run --rm -i -v "aiko-chat-gateway_aiko_gateway_data:/data" sqlite-dumper:latest sh -c '
+  if ! docker run --rm -i -v "${vol}:/data" sqlite-dumper:latest sh -c '
         set -e
         rm -f /data/aiko.db.restore /data/aiko.db.restore-wal /data/aiko.db.restore-shm
         sqlite3 /data/aiko.db.restore        # replay dump from stdin
@@ -270,13 +273,48 @@ restore_aiko_island() {
         mv -f /data/aiko.db.restore /data/aiko.db
       ' < "$sql_file"; then
     error "aiko-island restore FAILED. The candidate was rejected before the final install in almost all cases, so the live aiko.db is the original; a complete rescue copy (aiko.db.rescue-*) is also in the volume. Inspect the volume before retrying. Restarting on the current DB."
-    docker compose up -d
-    cleanup_backups
-    exit 1
+    docker start "$cid" >/dev/null || error "ALSO failed to restart $cid — island is DOWN, start it manually"
+    return 1
   fi
 
   log "Restored OK (previous DB kept in the volume as $rescue). Restarting island..."
-  docker compose up -d
+  docker start "$cid" >/dev/null || { error "restore installed but restart of $cid FAILED — island is DOWN, start it manually"; return 1; }
+}
+
+# Restore the aiko-chat-island SQLite store from the latest .sql dump in the
+# backup repo. Wraps _restore_island_core with: fetch-from-backup-repo, live
+# volume/container AUTO-DETECT (never a hardcoded ghost name — #1759), and a
+# typed-consent gate (irreversible: replaces the sole auth+message store).
+restore_aiko_island() {
+  log "Restoring aiko-chat-island..."
+
+  fetch_backups
+  local sql_file="$BACKUP_CLONE_DIR/aiko-island.sql"
+  if [ ! -s "$sql_file" ]; then
+    error "No (non-empty) aiko-island.sql in backup repo"; cleanup_backups; exit 1
+  fi
+
+  # Auto-detect the LIVE volume + container BEFORE the destructive confirm, so a
+  # missing/renamed target fails early — and so restore writes into the SAME
+  # volume the live island reads, not the orphaned pre-cutover ghost the old
+  # hardcoded name pointed at (#1759).
+  local gw_cid gw_vol
+  gw_cid=$(aiko_island_container) || { cleanup_backups; exit 1; }
+  gw_vol=$(aiko_island_volume "$gw_cid") || { cleanup_backups; exit 1; }
+
+  # Irreversible: replacing the sole auth+message store. Require typed consent,
+  # and show the resolved target so the operator can eyeball the volume.
+  echo "WARNING: this REPLACES the island's SOLE database (all accounts + messages + ACL)."
+  echo "  dump:   $sql_file ($(wc -l < "$sql_file") lines, $(du -h "$sql_file" | cut -f1))"
+  echo "  target: volume $gw_vol (live container $gw_cid)"
+  read -r -p "Type 'restore aiko-island' to proceed: " confirm
+  if [ "$confirm" != "restore aiko-island" ]; then
+    error "Aborted (no confirmation)"; cleanup_backups; exit 1
+  fi
+
+  if ! _restore_island_core "$sql_file" "$gw_cid" "$gw_vol"; then
+    cleanup_backups; exit 1
+  fi
 
   cleanup_backups
   log "aiko-island restore complete!"
@@ -416,6 +454,33 @@ restore_continuwuity() {
   echo "TODO: ship an ldb-based helper or wait for Continuwuity to add a"
   echo "      'restore-database' admin command (file an issue upstream)."
 }
+
+# When sourced by the test harness (RESTORE_LIB_ONLY=1), stop here: expose the
+# functions (_restore_island_core + the aiko_island_* lib) without running the
+# dispatch, which would otherwise demand a $SERVICE arg. `return` is valid only
+# because this branch is reached solely via `source`; a direct run never sets
+# RESTORE_LIB_ONLY, so it falls through to the dispatch below.
+if [ "${RESTORE_LIB_ONLY:-0}" = "1" ]; then
+  # `return` when sourced, `exit` when executed directly — mechanical, not by
+  # convention, so `RESTORE_LIB_ONLY=1 ./restore.sh` doesn't emit bash's
+  # "can only return from a function or sourced script" error.
+  return 0 2>/dev/null || exit 0
+fi
+
+# Deferred from the top of the file so the harness can source cleanly.
+if [ -z "$SERVICE" ]; then
+  echo "Usage: $0 <service>"
+  echo "  service: kanbn, outline, radicale, pm-bot, claudius, aiko-island, matrix, continuwuity"
+  echo ""
+  echo "Examples:"
+  echo "  $0 kanbn         # Restore latest from GitHub backup"
+  echo "  $0 outline       # Restore latest from GitHub backup"
+  echo "  $0 matrix        # Restore all matrix bridges + relay-bots"
+  echo "  $0 continuwuity  # Restore homeserver (requires AGE_IDENTITY_FILE)"
+  exit 1
+fi
+
+mkdir -p "$RESTORE_DIR"
 
 # Run restore
 case $SERVICE in
