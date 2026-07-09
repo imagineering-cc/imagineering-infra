@@ -74,6 +74,23 @@ jobs:
           REQUIRE_ALL: "1"
         run: ./scripts/test-secret-quoting.sh
 
+  restore-aiko-island:
+    name: Aiko Island Restore Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Real restore test: drives restore.sh's _restore_island_core + the
+      # aiko_island_* discovery lib against throwaway docker volumes, asserting
+      # the restored passkey rows land in the LIVE volume (content, not
+      # presence) and that discovery never picks the orphaned ghost volume
+      # (#1759). ubuntu-latest ships docker; REQUIRE_ALL=1 makes a missing
+      # docker a HARD failure so this can't silently skip and go green.
+      - name: Run aiko-island restore test
+        env:
+          REQUIRE_ALL: "1"
+        run: ./scripts/test-restore-aiko-island.sh
+
   caddy-validate:
     name: Caddyfile Validate
     runs-on: ubuntu-latest
