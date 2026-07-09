@@ -461,7 +461,10 @@ restore_continuwuity() {
 # because this branch is reached solely via `source`; a direct run never sets
 # RESTORE_LIB_ONLY, so it falls through to the dispatch below.
 if [ "${RESTORE_LIB_ONLY:-0}" = "1" ]; then
-  return 0
+  # `return` when sourced, `exit` when executed directly — mechanical, not by
+  # convention, so `RESTORE_LIB_ONLY=1 ./restore.sh` doesn't emit bash's
+  # "can only return from a function or sourced script" error.
+  return 0 2>/dev/null || exit 0
 fi
 
 # Deferred from the top of the file so the harness can source cleanly.

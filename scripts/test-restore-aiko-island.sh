@@ -105,6 +105,15 @@ passkey_count() {
     sqlite3 /data/aiko.db "SELECT count(*) FROM passkey_credentials;" 2>/dev/null || echo 0'
 }
 
+# cred_id <volume> — the credential_id of the (single) restored row, or "" if the
+# DB/row is absent. Asserting the exact identity (not just count>0) is what makes
+# the content check falsifiable: a stale row or a wrong dump can't sneak past.
+cred_id() {
+  docker run --rm -v "$1:/data:ro" sqlite-dumper:latest sh -c '
+    [ -f /data/aiko.db ] || { echo ""; exit 0; }
+    sqlite3 /data/aiko.db "SELECT credential_id FROM passkey_credentials LIMIT 1;" 2>/dev/null || echo ""'
+}
+
 # --- Source the REAL restore code (functions only, no dispatch) -------------
 # shellcheck source=restore.sh disable=SC1091
 RESTORE_LIB_ONLY=1 . "$SCRIPT_DIR/restore.sh"
@@ -118,25 +127,47 @@ if [ "$VOL" = "$VOL_LIVE" ]; then ok "volume resolves to the mounted live volume
 if [ "$VOL" != "$VOL_GHOST" ]; then ok "discovery never returns the ghost volume"; else bad "discovery returned the ghost volume"; fi
 
 echo "[2] RED: restoring into the ghost volume loses data (the #1759 bug)"
-# This is the pre-fix behaviour: install into the hardcoded ghost name. The
-# live volume the island actually reads must be UNTOUCHED — 0 passkeys.
-_restore_island_core "$DUMP" "$CID" "$VOL_GHOST" >/dev/null 2>&1
+# This is the pre-fix behaviour: install into the hardcoded ghost name. To make
+# the RED assertion a real falsifier (not a vacuous one), we must prove the write
+# ACTUALLY happened to the ghost — a no-op or a failed install would ALSO leave
+# the live volume empty and would otherwise pass. So assert all three:
+#   (a) the restore itself succeeded, (b) the GHOST volume received the row,
+#   (c) the LIVE volume the island reads stayed empty (the silent data loss).
+if _restore_island_core "$DUMP" "$CID" "$VOL_GHOST" >/dev/null 2>&1; then
+  ok "ghost restore ran and succeeded (the pre-fix path executed)"
+else
+  bad "ghost restore itself failed — can't prove data-loss, RED would be vacuous"
+fi
+GHOST_AFTER="$(passkey_count "$VOL_GHOST")"
 LIVE_AFTER_GHOST="$(passkey_count "$VOL_LIVE")"
+if [ "$GHOST_AFTER" -gt 0 ]; then
+  ok "ghost volume received the write (count=$GHOST_AFTER) — the write really landed somewhere"
+else
+  bad "ghost volume has 0 passkeys — restore was a no-op, so the RED assertion proves nothing"
+fi
 if [ "$LIVE_AFTER_GHOST" -eq 0 ]; then
-  ok "ghost restore left the live volume empty (proves the bug it would've hidden)"
+  ok "live volume left empty by ghost restore (the silent data loss the bug caused)"
 else
   bad "expected 0 passkeys in live volume after ghost restore, got $LIVE_AFTER_GHOST"
 fi
 
-echo "[3] CONTENT: restoring into the DISCOVERED volume lands the rows live"
+echo "[3] CONTENT: restoring into the DISCOVERED volume lands the EXACT rows live"
 _restore_island_core "$DUMP" "$CID" "$VOL"
 CORE_RC=$?
 LIVE_AFTER="$(passkey_count "$VOL_LIVE")"
+LIVE_CRED="$(cred_id "$VOL_LIVE")"
 if [ "$CORE_RC" -eq 0 ]; then ok "_restore_island_core succeeded"; else bad "_restore_island_core returned $CORE_RC"; fi
-if [ "$LIVE_AFTER" -gt 0 ]; then
-  ok "live volume now holds the restored passkey row (count=$LIVE_AFTER)"
+# Exact count, not >0: a stale/duplicate/wrong-dump row must not sneak past.
+if [ "$LIVE_AFTER" = "1" ]; then
+  ok "live volume holds exactly the one restored row (count=1)"
 else
-  bad "live volume still has 0 passkeys after restore into the discovered volume"
+  bad "expected exactly 1 passkey in live volume, got $LIVE_AFTER"
+fi
+# Exact identity: proves it's OUR dump's row, not just any passkey row.
+if [ "$LIVE_CRED" = "cred_abc" ]; then
+  ok "restored row identity matches the dump (credential_id=cred_abc)"
+else
+  bad "expected credential_id 'cred_abc' in live volume, got '$LIVE_CRED'"
 fi
 # The fix restarts via `docker start <cid>` — the container must be up again.
 if [ "$(docker inspect -f '{{.State.Running}}' "$CTR" 2>/dev/null)" = "true" ]; then

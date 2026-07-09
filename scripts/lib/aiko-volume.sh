@@ -21,23 +21,39 @@
 # message on stderr) on failure, so callers can `|| return` / `|| exit`.
 
 # The running island container. Match the image tag, tolerating island|gateway
-# because Melbourne (pre-cutover) still runs aiko-chat-gateway:*. First match
-# wins — a box runs exactly one island.
+# because Melbourne (pre-cutover) still runs aiko-chat-gateway:*.
+#
+# Fail CLOSED on ambiguity: a box is meant to run exactly one island, but the
+# restore path stops + swaps + starts this container's SOLE auth+message DB, so
+# it must never GUESS when two match (a stale cutover sibling, a leftover
+# resttest container, a co-located second island). Uncertainty removes
+# authority — return an error the operator must resolve, don't silently pick one.
+#
+# KNOWN LIMITATION (tracked follow-up): discovery is `docker ps` (RUNNING only).
+# A crashed / exited island is invisible, so a restore-after-boot-failure can't
+# locate the volume until the container is running again. Widening to
+# `docker ps -a` is deferred because it changes backup semantics and must first
+# resolve post-cutover exited-container ambiguity (see the #1759 PR discussion).
 aiko_island_container() {
-  local cid
-  cid=$(docker ps --format '{{.Names}}\t{{.Image}}' \
-    | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1; exit}')
-  if [ -z "$cid" ]; then
+  local matches count
+  matches=$(docker ps --format '{{.Names}}\t{{.Image}}' \
+    | awk -F'\t' '$2 ~ /^aiko-chat-(island|gateway):/ {print $1}')
+  count=$(printf '%s' "$matches" | grep -c .)
+  if [ "$count" -eq 0 ]; then
     echo "aiko-volume: no running island container (image aiko-chat-island|gateway:*)" >&2
     return 1
   fi
-  printf '%s\n' "$cid"
+  if [ "$count" -gt 1 ]; then
+    echo "aiko-volume: >1 running island container matched ($(printf '%s' "$matches" | tr '\n' ' ')) — refusing to guess which is THE island" >&2
+    return 1
+  fi
+  printf '%s\n' "$matches"
 }
 
 # The docker volume backing /data in the given container. This is the SINGLE
 # source of truth for "which volume holds aiko.db" — never hardcode the name.
 aiko_island_volume() {
-  local cid=$1 vol
+  local cid=${1:-} vol   # ${1:-} so the -z diagnostic fires under set -u, not an abort
   if [ -z "$cid" ]; then
     echo "aiko-volume: aiko_island_volume requires a container id/name" >&2
     return 1
