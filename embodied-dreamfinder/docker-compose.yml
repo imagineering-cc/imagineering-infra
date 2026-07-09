@@ -59,6 +59,10 @@ services:
       # Second password scoping a session to "ascend" — unlocks the DF that knows last night
       # (AUTH_PASSWORD alone gives plain "base" DF, blind to it). See server.js /auth/login.
       - ASCEND_PASSWORD=${ASCEND_PASSWORD:-}
+      # Shared secret letting the in-container LiveKit voice agent request ascend-scoped
+      # context over localhost (server.js localhost override). Server + agent share this
+      # container env, so one value serves both. <16 chars → override disabled (fail-closed).
+      - INTERNAL_SCOPE_KEY=${INTERNAL_SCOPE_KEY:-}
     volumes:
       - embodied-dreamfinder-data:/data
       - /home/nick/whisper.cpp/build/bin:/opt/whisper/bin:ro

@@ -799,6 +799,12 @@ deploy_embodied_dreamfinder() {
         printf 'ASCEND_INGEST_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.ascend_ingest_key')")"
         # Second password scoping a session to "ascend" (unlocks the DF that knows last night).
         printf 'ASCEND_PASSWORD=%s\n'       "$(dotenv_quote "$(edf_field '.ascend_password')")"
+        # Shared secret proving a localhost caller is the trusted in-container voice agent
+        # (not the public-embeddable renderer): lets it request ascend-scoped context over
+        # 127.0.0.1 so the local LiveKit pipeline gets the night. Server + agent run in the
+        # same container, so this one value reaches both. <16 chars → server disables the
+        # override (fail-closed). See embodied-dreamfinder server.js localhost branch.
+        printf 'INTERNAL_SCOPE_KEY=%s\n'    "$(dotenv_quote "$(edf_field '.internal_scope_key')")"
     } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
     # Compose-file selection: only apply the lyra-live override (which mounts the
