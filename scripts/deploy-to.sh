@@ -439,8 +439,17 @@ deploy_backups() {
     rsync -az "$REPO_ROOT/scripts/lib/" "$REMOTE":"$rstage/lib/"
     # Fail closed BEFORE any /opt/scripts mutation if the libs the scripts source
     # didn't stage — better no deploy than a half-deploy over a live cron path.
+    # (Remote rsync is implicitly proven present: the staging rsync above would
+    # have failed here, before any mutation, if it were missing.)
     ssh "$REMOTE" "test -s '$rstage/lib/aiko-volume.sh' && test -s '$rstage/lib/telegram.sh'" \
         || { echo "ERROR: required libs missing from staging — aborting before install"; ssh "$REMOTE" "rm -rf '$rstage'"; return 1; }
+    # Parse the STAGED payload BEFORE mutating /opt/scripts: a syntactically broken
+    # script/lib must be caught while the live tree is still untouched (fail closed
+    # BEFORE, not merely detect AFTER — the live 04:00 cron can't be left broken by
+    # a bad push). Re-checked post-install below as belt-and-braces.
+    ssh "$REMOTE" "bash -n '$rstage/backup.sh' && bash -n '$rstage/restore.sh' \
+        && bash -n '$rstage/lib/aiko-volume.sh' && bash -n '$rstage/lib/telegram.sh'" \
+        || { echo "ERROR: staged payload failed bash -n — aborting before any /opt/scripts change"; ssh "$REMOTE" "rm -rf '$rstage'"; return 1; }
     # Install lib first, consumers last, one transaction. `install` sets mode+owner
     # deterministically (no separate chmod/chown races).
     ssh "$REMOTE" "sudo mkdir -p /opt/scripts/lib \
