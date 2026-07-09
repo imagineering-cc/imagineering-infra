@@ -54,8 +54,10 @@ VOL_GHOST="aiko-resttest-ghost-$SUFFIX"     # the orphaned pre-cutover name
 WORK="$(mktemp -d)"
 
 cleanup() {
-  docker rm -f "$CTR" >/dev/null 2>&1 || true
-  docker volume rm -f "$VOL_LIVE" "$VOL_GHOST" >/dev/null 2>&1 || true
+  # ${CTR2:-}/${VOL2:-} are only set in step [4]; default-empty so the trap is
+  # set -u safe if the test aborts before [4] defines them.
+  docker rm -f "$CTR" "${CTR2:-}" >/dev/null 2>&1 || true
+  docker volume rm -f "$VOL_LIVE" "$VOL_GHOST" "${VOL2:-}" >/dev/null 2>&1 || true
   docker image rm -f "$IMG" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -175,6 +177,24 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$CTR" 2>/dev/null)" = "true" ]; 
 else
   bad "island container is not running after restore (docker start failed)"
 fi
+
+echo "[4] SAFETY: discovery fails CLOSED when >1 island container matches"
+# A destructive stop/swap/start must never GUESS which container is THE island.
+# This makes the fail-closed guard permanently falsifiable in the suite (not just
+# manually verified once): stand up a SECOND matching container and assert
+# aiko_island_container refuses. Runs LAST and tears the second container down
+# immediately, so the single-container invariant the earlier steps rely on holds.
+CTR2="aiko-island-resttest2-$SUFFIX"
+VOL2="aiko-resttest-second-$SUFFIX"
+docker volume create "$VOL2" >/dev/null
+docker run -d --name "$CTR2" -v "$VOL2:/data" "$IMG" >/dev/null
+if aiko_island_container >/dev/null 2>&1; then
+  bad "discovery returned a container despite 2 matching — first-match guess is back"
+else
+  ok "discovery refused to guess between 2 matching containers (fail-closed)"
+fi
+docker rm -f "$CTR2" >/dev/null 2>&1 || true
+docker volume rm -f "$VOL2" >/dev/null 2>&1 || true
 
 echo ""
 echo "restore test: $PASS passed, $FAIL failed"
