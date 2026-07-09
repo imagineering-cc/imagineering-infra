@@ -420,21 +420,44 @@ deploy_familiars_server() {
 deploy_backups() {
     echo "Deploying backup configuration..."
 
-    # Deploy backup scripts + the lib/ helpers they source. backup.sh and
-    # restore.sh do `. "$SCRIPT_DIR/lib/{telegram,aiko-volume}.sh"` at runtime,
-    # so the lib dir MUST land alongside them: a sourced-but-missing lib aborts
-    # the script, and for the 04:00 backup cron that is a SILENT daily-backup
-    # failure — the exact ghost class #1759 fixed, reintroduced via the deploy
-    # path. Copy the WHOLE lib/ dir so new helpers are covered automatically
-    # (no per-file drift). rsync into a staging dir, then sudo-install.
-    echo "Deploying backup scripts + lib helpers..."
-    ssh "$REMOTE" "sudo mkdir -p /opt/scripts/lib"
-    scp "$REPO_ROOT/scripts/backup.sh" "$REMOTE":/tmp/backup.sh
-    scp "$REPO_ROOT/scripts/restore.sh" "$REMOTE":/tmp/restore.sh
-    rsync -az "$REPO_ROOT/scripts/lib/" "$REMOTE":/tmp/scripts-lib/
-    ssh "$REMOTE" "sudo mv /tmp/backup.sh /tmp/restore.sh /opt/scripts/ && sudo cp /tmp/scripts-lib/*.sh /opt/scripts/lib/ && rm -rf /tmp/scripts-lib"
-    ssh "$REMOTE" "sudo chmod +x /opt/scripts/backup.sh /opt/scripts/restore.sh /opt/scripts/lib/*.sh"
-    ssh "$REMOTE" "sudo chown nick:nick /opt/scripts/*.sh /opt/scripts/lib/*.sh"
+    # Deploy backup scripts + the lib/ helpers they source, DEPENDENCY-FIRST.
+    # backup.sh/restore.sh `. "$SCRIPT_DIR/lib/aiko-volume.sh"` (+ telegram.sh)
+    # at runtime, so a consumer script installed BEFORE its lib — or beside a
+    # FAILED lib copy — reopens the exact silent-04:00-cron-death #1759 fixed.
+    # So the order and atomicity matter as much as copying the files:
+    #   1. stage the whole payload under one fresh remote temp dir,
+    #   2. FAIL CLOSED before touching /opt/scripts if a required lib is absent,
+    #   3. install lib FIRST (rsync --delete → /opt/scripts/lib is an authoritative
+    #      mirror, so a helper removed from the repo can't linger as a sourceable
+    #      tombstone), then flip the consumer scripts LAST, in one ssh transaction,
+    #   4. assert every sourced file is present + parseable on-box before success.
+    echo "Deploying backup scripts + lib helpers (lib first)..."
+    local rstage
+    rstage=$(ssh "$REMOTE" 'mktemp -d /tmp/scripts-deploy.XXXXXX') \
+        || { echo "ERROR: remote mktemp failed"; return 1; }
+    scp -q "$REPO_ROOT/scripts/backup.sh" "$REPO_ROOT/scripts/restore.sh" "$REMOTE":"$rstage/"
+    rsync -az "$REPO_ROOT/scripts/lib/" "$REMOTE":"$rstage/lib/"
+    # Fail closed BEFORE any /opt/scripts mutation if the libs the scripts source
+    # didn't stage — better no deploy than a half-deploy over a live cron path.
+    ssh "$REMOTE" "test -s '$rstage/lib/aiko-volume.sh' && test -s '$rstage/lib/telegram.sh'" \
+        || { echo "ERROR: required libs missing from staging — aborting before install"; ssh "$REMOTE" "rm -rf '$rstage'"; return 1; }
+    # Install lib first, consumers last, one transaction. `install` sets mode+owner
+    # deterministically (no separate chmod/chown races).
+    ssh "$REMOTE" "sudo mkdir -p /opt/scripts/lib \
+        && sudo rsync -a --delete '$rstage/lib/' /opt/scripts/lib/ \
+        && sudo chown -R nick:nick /opt/scripts/lib \
+        && sudo install -o nick -g nick -m 0755 '$rstage/backup.sh'  /opt/scripts/backup.sh \
+        && sudo install -o nick -g nick -m 0755 '$rstage/restore.sh' /opt/scripts/restore.sh \
+        && rm -rf '$rstage'" \
+        || { echo "ERROR: remote install failed"; ssh "$REMOTE" "rm -rf '$rstage'" 2>/dev/null; return 1; }
+    # Post-install falsifier: deploy exit 0 must mean "the cron won't abort on a
+    # missing/broken source", not just "bytes moved". Each sourced file must be
+    # readable AND parse (bash -n — no execution, so no telegram side effects).
+    ssh "$REMOTE" "test -r /opt/scripts/lib/aiko-volume.sh && test -r /opt/scripts/lib/telegram.sh \
+        && bash -n /opt/scripts/backup.sh && bash -n /opt/scripts/restore.sh \
+        && bash -n /opt/scripts/lib/aiko-volume.sh && bash -n /opt/scripts/lib/telegram.sh" \
+        || { echo "ERROR: post-install source check FAILED — backup cron would break; investigate the box"; return 1; }
+    echo "  backup scripts + lib installed and source-verified"
 
     # Ensure cron is installed and running
     if ! ssh "$REMOTE" "systemctl is-active cron > /dev/null 2>&1"; then
