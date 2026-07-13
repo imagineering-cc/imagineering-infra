@@ -15,10 +15,10 @@ const DIAGNOSE_MODEL = process.env.HEALER_MODEL || 'sonnet';
  * be monotonic from the inside out so the INNER layer fails first with a clean
  * error instead of an opaque outer kill:
  *
- *   claude generation  <  shim (SHIM_TIMEOUT_MS, default 120s on the box)
+ *   claude generation  <  shim (SHIM_TIMEOUT_MS, default 180s on the box)
  *                       <  curl --max-time  <  runOnHost hard SIGKILL
  *
- * The defaults (150s curl / 160s runOnHost) sit ABOVE the 120s shim ceiling, so
+ * The defaults (200s curl / 210s runOnHost) sit ABOVE the 180s shim ceiling, so
  * a too-slow diagnosis surfaces as the shim's own "claude timed out after …"
  * rather than `curl exit 28`. This is the deploy-#49 fix: a legitimate 93s
  * sonnet verdict was being thrown away by the old hardcoded 90s curl ceiling
@@ -26,20 +26,26 @@ const DIAGNOSE_MODEL = process.env.HEALER_MODEL || 'sonnet';
  * a shell string (it's a base64 positional arg now), but we still keep it an
  * integer for clean `--max-time` semantics.
  *
+ * 2026-07-13: the whole chain moved up 120→180 (shim) / 150→200 (curl) after
+ * back-to-back nightly timeouts — the sonnet 4-container diagnosis was brushing
+ * the old 120s wall with <4s headroom (measured 96s live once given room). The
+ * ceilings stay in lockstep (curl floor == shim ceiling) so the chain never
+ * inverts.
+ *
  * #50 FLOOR: the healer can't introspect the shim's OWN ceiling (SHIM_TIMEOUT_MS,
- * 120s on the box). A too-small SHIM_HTTP_TIMEOUT_MS would silently recreate the
+ * 180s on the box). A too-small SHIM_HTTP_TIMEOUT_MS would silently recreate the
  * deploy-#49 bug (curl killing the call before the shim can answer). So we CLAMP
- * the effective ms up to at least the shim's 120s ceiling and warn on stderr when
+ * the effective ms up to at least the shim's 180s ceiling and warn on stderr when
  * we do. This is monotonicity-preserving: runOnHostMs stays ms+10s, so the
  * existing curl<runOnHost invariant tests still hold for every input.
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {{curlMaxTimeSec: number, runOnHostMs: number}}
  */
-const SHIM_CEILING_MS = 120_000; // SHIM_TIMEOUT_MS on the box; the curl --max-time floor
+const SHIM_CEILING_MS = 180_000; // SHIM_TIMEOUT_MS on the box; the curl --max-time floor
 export function resolveHttpTimeouts(env = process.env) {
-  const raw = Number.parseInt(env.SHIM_HTTP_TIMEOUT_MS ?? '150000', 10);
-  const parsed = Number.isFinite(raw) && raw > 0 ? raw : 150_000;
+  const raw = Number.parseInt(env.SHIM_HTTP_TIMEOUT_MS ?? '200000', 10);
+  const parsed = Number.isFinite(raw) && raw > 0 ? raw : 200_000;
   const ms = Math.max(parsed, SHIM_CEILING_MS);
   if (ms !== parsed) {
     process.stderr.write(

@@ -69,12 +69,15 @@ code encodes the worst tier: `0`=green, `1`=amber, `2`=red, `3`=healer error.
 | `SHIM_HTTP_TIMEOUT_MS` | `150000`               | curl `--max-time` for the shim call; outer SIGKILL is this + 10s |
 
 > **Timeout chain.** The ceilings are monotonic from the inside out —
-> `claude generation < shim (SHIM_TIMEOUT_MS, default 120s on the box) < curl
-> --max-time < runOnHost SIGKILL` — so a too-slow diagnosis fails on the shim
-> with a clean "claude timed out" rather than `curl exit 28` discarding an
-> answer the shim already produced. Keep `SHIM_HTTP_TIMEOUT_MS` above the shim's
-> `SHIM_TIMEOUT_MS`. (Observed live: a 93s sonnet verdict for 4 containers — the
-> old hardcoded 90s curl ceiling threw it away.)
+> `claude generation < shim (SHIM_TIMEOUT_MS, default 180s on the box) < curl
+> --max-time (SHIM_HTTP_TIMEOUT_MS, default 200s) < runOnHost SIGKILL (+10s)` —
+> so a too-slow diagnosis fails on the shim with a clean "claude timed out"
+> rather than `curl exit 28` discarding an answer the shim already produced.
+> Keep `SHIM_HTTP_TIMEOUT_MS` above the shim's `SHIM_TIMEOUT_MS`. (Observed live:
+> a 93s sonnet verdict for 4 containers — the old hardcoded 90s curl ceiling
+> threw it away; and on 2026-07-13 the whole chain moved 120→180 / 150→200 after
+> back-to-back nightly timeouts left the 4-container sonnet diagnosis, measured
+> at 96s, with under 4s of headroom against the old 120s wall.)
 
 ## The traffic-light leash
 
@@ -271,8 +274,13 @@ fail fast on misconfiguration.
 
 ## Known substrate facts (2026-06-22)
 
-- `claude-shim` lives at `~/apps/claude-shim` **on OCI only** — not checked in
-  anywhere (deployed by rsync). Versioning it is separate debt.
+- `claude-shim` is versioned in this repo at `claude-shim/` (source + Dockerfile
+  + compose + SOPS `secrets.yaml`) and deploys via
+  `./scripts/deploy-to.sh 149.118.69.221 claude-shim`, which rsyncs it to
+  `~/apps/claude-shim` on OCI and `docker compose build && up -d`. Non-secret
+  config (e.g. `SHIM_TIMEOUT_MS`) lives in the compose `environment:` block; only
+  the OAuth token is generated into `.env` from `secrets.yaml` at deploy time.
+  (This corrects an earlier note that claimed it was rsync-only / not in git.)
 - Observed live: `tw-gremlin` logged `level:50 "worker connection closed
   unexpectedly"` then re-registered under a new LiveKit node ~66ms later — a
   self-healed node rotation, the canonical "error that isn't a problem".
