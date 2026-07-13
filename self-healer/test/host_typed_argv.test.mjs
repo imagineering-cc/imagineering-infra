@@ -228,23 +228,23 @@ test('splitOnNonce: no nonce present => all head, empty logs (fail toward visibl
 
 // -- #50 timeout floor --------------------------------------------------------
 
-test('resolveHttpTimeouts: clamps a sub-floor SHIM_HTTP_TIMEOUT_MS up to >=120000', () => {
+test('resolveHttpTimeouts: clamps a sub-floor SHIM_HTTP_TIMEOUT_MS up to >=180000', () => {
   const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '30000' });
-  assert.ok(curlMaxTimeSec * 1000 >= 120_000, 'curl --max-time clamped to >= shim ceiling');
-  assert.equal(curlMaxTimeSec, 120);
-  assert.equal(runOnHostMs, 130_000);       // ms(120000) + 10s, monotonic above curl
+  assert.ok(curlMaxTimeSec * 1000 >= 180_000, 'curl --max-time clamped to >= shim ceiling');
+  assert.equal(curlMaxTimeSec, 180);
+  assert.equal(runOnHostMs, 190_000);       // ms(180000) + 10s, monotonic above curl
   assert.ok(curlMaxTimeSec * 1000 < runOnHostMs);
 });
 
 test('resolveHttpTimeouts: a value AT the floor passes through unchanged', () => {
-  const { curlMaxTimeSec } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '120000' });
-  assert.equal(curlMaxTimeSec, 120);
+  const { curlMaxTimeSec } = resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '180000' });
+  assert.equal(curlMaxTimeSec, 180);
 });
 
-test('resolveHttpTimeouts: default (150000) is above the floor and unchanged', () => {
+test('resolveHttpTimeouts: default (200000) is above the floor and unchanged', () => {
   const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts({});
-  assert.equal(curlMaxTimeSec, 150);
-  assert.equal(runOnHostMs, 160_000);
+  assert.equal(curlMaxTimeSec, 200);
+  assert.equal(runOnHostMs, 210_000);
 });
 
 test('resolveHttpTimeouts: an above-floor value is NOT clamped (floor only raises, never lowers)', () => {

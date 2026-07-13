@@ -288,23 +288,23 @@ test('validateVerdict: coerces malformed finding fields to safe defaults', () =>
   assert.equal(f.diagnosis, ''); // non-string coerced
 });
 
-test('resolveHttpTimeouts: defaults sit above the 120s shim ceiling, monotonic (deploy #49)', () => {
+test('resolveHttpTimeouts: defaults sit above the 180s shim ceiling, monotonic (deploy #49)', () => {
   const { curlMaxTimeSec, runOnHostMs } = resolveHttpTimeouts({});
-  assert.equal(curlMaxTimeSec, 150);
-  assert.equal(runOnHostMs, 160_000);
+  assert.equal(curlMaxTimeSec, 200);
+  assert.equal(runOnHostMs, 210_000);
   // curl must kill BEFORE the outer hard SIGKILL...
   assert.ok(curlMaxTimeSec * 1000 < runOnHostMs);
-  // ...and AFTER the shim's own 120s ceiling, so the shim fails first (clean
+  // ...and AFTER the shim's own 180s ceiling, so the shim fails first (clean
   // "claude timed out") rather than curl exit 28 discarding a live answer.
-  assert.ok(curlMaxTimeSec * 1000 > 120_000);
+  assert.ok(curlMaxTimeSec * 1000 > 180_000);
 });
 
 test('resolveHttpTimeouts: honors SHIM_HTTP_TIMEOUT_MS, falls back on garbage/non-positive', () => {
   assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '200000' }).curlMaxTimeSec, 200);
   assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '200000' }).runOnHostMs, 210_000);
-  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: 'xyz' }).curlMaxTimeSec, 150); // unparseable ⇒ default
-  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '0' }).curlMaxTimeSec, 150);   // non-positive ⇒ default
-  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '-5' }).curlMaxTimeSec, 150);
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: 'xyz' }).curlMaxTimeSec, 200); // unparseable ⇒ default
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '0' }).curlMaxTimeSec, 200);   // non-positive ⇒ default
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '-5' }).curlMaxTimeSec, 200);
 });
 
 test('resolveHttpTimeouts: curlMaxTimeSec is an integer (shell-inert interpolation)', () => {
@@ -327,8 +327,9 @@ test('resolveHttpTimeouts: curl<runOnHost monotonicity + integer hold for ALL in
     assert.ok(curlMaxTimeSec * 1000 < runOnHostMs, `curl<runOnHost for ${JSON.stringify(v)}`);
   }
   // the injection string collapses to its leading integer (ms), never a shell
-  // token: '150000; rm -rf /' → parseInt 150000 ms → ceil(150000/1000) = 150s.
-  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '150000; rm -rf /' }).curlMaxTimeSec, 150);
+  // token: '150000; rm -rf /' → parseInt 150000 ms, which is below the 180s
+  // floor, so it clamps up → ceil(180000/1000) = 180s. The '; rm -rf /' is inert.
+  assert.equal(resolveHttpTimeouts({ SHIM_HTTP_TIMEOUT_MS: '150000; rm -rf /' }).curlMaxTimeSec, 180);
 });
 
 test('collapseRepeats: folds identical runs into ×N, leaves singletons alone (no timestamps)', () => {

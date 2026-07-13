@@ -21,11 +21,14 @@ services:
       # compose ${VAR} interpolation. The real OAuth token lives ONLY in the
       # encrypted secrets.yaml, never in git as plaintext.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      # deploy-#49 floor: the self-healer's sonnet diagnoses take ~60-93s and
+      # deploy-#49 floor: the self-healer's sonnet diagnoses take ~60-96s and
       # time out against server.js's default 60000ms ceiling. Not a secret, so
       # versioned here as a literal (not in secrets.yaml). Keep below the
-      # healer's own SHIM_HTTP_TIMEOUT_MS=150000, which must sit above this.
-      - SHIM_TIMEOUT_MS=120000
+      # healer's own SHIM_HTTP_TIMEOUT_MS=200000, which must sit above this.
+      # 2026-07-13: raised 120000→180000 after back-to-back nightly timeouts
+      # (last success had <4s headroom); the healer curl ceiling moved 150→200
+      # in lockstep (self-healer/src/diagnose.mjs) so the chain stays monotonic.
+      - SHIM_TIMEOUT_MS=180000
     ports:
       - "127.0.0.1:8088:8088"   # host-local smoke tests; container callers use the network name
     networks:
