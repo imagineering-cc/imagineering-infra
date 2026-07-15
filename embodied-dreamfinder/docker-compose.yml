@@ -8,6 +8,8 @@ services:
       - "3015:3000"
     networks:
       - imagineering
+    extra_hosts:
+      - "host.docker.internal:192.168.32.1"
     environment:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_SECRET=${AUTH_SECRET:-}
@@ -29,6 +31,7 @@ services:
       - PORT=3000
       - VOICE_MODE=${VOICE_MODE:-realtime}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Stage selectors — engine concepts (STT → BRAIN → TTS), one env var per
       # stage. NO defaults here on purpose: the pipeline is fail-closed (an
       # unset/unknown selector crashes the boot with a named error) and a
@@ -36,6 +39,10 @@ services:
       # VOICE_MODE=realtime silent-substrate-switch class.
       - STT=${STT}
       - BRAIN=${BRAIN}
+      - BRAIN_URL=${BRAIN_URL:-}
+      - BRAIN_SERVICE_KEY=${BRAIN_SERVICE_KEY:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - TTS_VOICE=${TTS_VOICE:-}
       - BRAIN_MODEL=${BRAIN_MODEL}
       - TTS=${TTS}
       - WHISPER_CLI=/opt/whisper/bin/whisper-cli
