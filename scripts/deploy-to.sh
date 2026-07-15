@@ -829,13 +829,16 @@ deploy_embodied_dreamfinder() {
         printf 'LIVEKIT_URL=%s\n'           "$(dotenv_quote "$(edf_field '.livekit_url')")"
         printf 'LIVEKIT_API_KEY=%s\n'       "$(dotenv_quote "$(edf_field '.livekit_api_key')")"
         printf 'LIVEKIT_API_SECRET=%s\n'    "$(dotenv_quote "$(edf_field '.livekit_api_secret')")"
-        # lyra-live fields (merged from feat/lyra-live-voice; routed through the
-        # same dotenv_quote hardening as every other secret above).
-        printf 'DF_BRAIN=%s\n'              "$(dotenv_quote "$(edf_field '.df_brain' 'api')")"
-        printf 'TTS_ENGINE=%s\n'            "$(dotenv_quote "$(edf_field '.tts_engine' 'kokoro')")"
-        printf 'LYRA_SSH_KEY=%s\n'          "$(dotenv_quote "$(edf_field '.lyra_ssh_key')")"
-        printf 'LYRA_SSH_HOST=%s\n'         "$(dotenv_quote "$(edf_field '.lyra_ssh_host' 'ubuntu@207.211.145.30')")"
-        printf 'OPENAI_TTS_VOICE=%s\n'      "$(dotenv_quote "$(edf_field '.openai_tts_voice' 'sage')")"
+        # Stage selectors — engine concepts (STT -> BRAIN -> TTS), renamed from
+        # DF_BRAIN/STT_ENGINE/TTS_ENGINE at the 2026-07-15 demo cutover. The
+        # pipeline is FAIL-CLOSED on these (unset/unknown -> boot crash), so the
+        # defaults here ARE the deployed contract. lyra-live mode (and its
+        # LYRA_SSH_* fields) was removed with the rename; it returns behind the
+        # engine's brain selector in Stage C of the engine-extraction plan.
+        printf 'BRAIN=%s\n'                "$(dotenv_quote "$(edf_field '.brain' 'oauth')")"
+        printf 'BRAIN_MODEL=%s\n'          "$(dotenv_quote "$(edf_field '.brain_model' 'claude-opus-4-8')")"
+        printf 'STT=%s\n'                  "$(dotenv_quote "$(edf_field '.stt' 'faster-whisper')")"
+        printf 'TTS=%s\n'                  "$(dotenv_quote "$(edf_field '.tts' 'kokoro')")"
         # ascend night-loop ingest bearer (POST /api/ascend/night). Same secret as ascend's ASCEND_DF_KEY.
         printf 'ASCEND_INGEST_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.ascend_ingest_key')")"
         # Second password scoping a session to "ascend" (unlocks the DF that knows last night).
@@ -848,18 +851,12 @@ deploy_embodied_dreamfinder() {
         printf 'INTERNAL_SCOPE_KEY=%s\n'    "$(dotenv_quote "$(edf_field '.internal_scope_key')")"
     } > "$REPO_ROOT/embodied-dreamfinder/.env"
 
-    # Compose-file selection: only apply the lyra-live override (which mounts the
-    # ssh deploy key into the container) when the brain is actually lyra-live, so
-    # the default api path never carries the key (cage-match #81 finding 1).
-    local DF_BRAIN_VAL EDF_COMPOSE_ARGS
-    DF_BRAIN_VAL=$(edf_field '.df_brain' 'api')
-    if [ "$DF_BRAIN_VAL" = "lyra-live" ]; then
-        EDF_COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.lyra.yml"
-        echo "DF_BRAIN=lyra-live -> applying docker-compose.lyra.yml (mounts ssh deploy key)"
-    else
-        EDF_COMPOSE_ARGS="-f docker-compose.yml"
-        echo "DF_BRAIN=$DF_BRAIN_VAL -> base compose only (no ssh key mounted)"
-    fi
+    # Base compose only. lyra-live (and its docker-compose.lyra.yml key mount)
+    # is not selectable since the BRAIN rename — the current pipeline accepts
+    # oauth|api only. The override file stays in the repo for Stage C, when the
+    # engine's brain selector brings lyra-live back as a first-class mode.
+    local EDF_COMPOSE_ARGS
+    EDF_COMPOSE_ARGS="-f docker-compose.yml"
 
     # Deploy files
     ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"

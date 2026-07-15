@@ -29,23 +29,19 @@ services:
       - PORT=3000
       - VOICE_MODE=${VOICE_MODE:-realtime}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # lyra-live brain: route the voice LLM stage to the REAL Lyra container on
-      # robins-oci via ssh+docker exec. Dark by default (api); set DF_BRAIN=lyra-live
-      # in .env to activate, with TTS_ENGINE=openai for her 'sage' voice. The ssh
-      # deploy key is NOT mounted here — it lives in docker-compose.lyra.yml, an
-      # override applied ONLY in lyra-live mode, so the default (api) container
-      # never carries the key (cage-match #81 finding 1: an unconditionally-mounted
-      # key is exfiltratable under container compromise even when the path is dark).
-      # deploy-to.sh applies the override automatically when DF_BRAIN=lyra-live.
-      - DF_BRAIN=${DF_BRAIN:-api}
-      - LYRA_SSH_HOST=${LYRA_SSH_HOST:-ubuntu@207.211.145.30}
-      - LYRA_SSH_KEY=${LYRA_SSH_KEY:-}
-      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-sage}
+      # Stage selectors — engine concepts (STT → BRAIN → TTS), one env var per
+      # stage. NO defaults here on purpose: the pipeline is fail-closed (an
+      # unset/unknown selector crashes the boot with a named error) and a
+      # compose-level default would silently mask a missing .env line — the
+      # VOICE_MODE=realtime silent-substrate-switch class.
+      - STT=${STT}
+      - BRAIN=${BRAIN}
+      - BRAIN_MODEL=${BRAIN_MODEL}
+      - TTS=${TTS}
       - WHISPER_CLI=/opt/whisper/bin/whisper-cli
       - WHISPER_MODEL=/opt/whisper/models/ggml-base.en.bin
       - PIPER_BIN=/opt/piper/piper
       - PIPER_VOICE=${PIPER_VOICE:-/opt/piper/voices/en_US-lessac-high.onnx}
-      - TTS_ENGINE=${TTS_ENGINE:-kokoro}
       - KOKORO_PYTHON=python3
       - KOKORO_SCRIPT=/app/kokoro-tts.py
       - KOKORO_VOICE=${KOKORO_VOICE:-bm_fable}
