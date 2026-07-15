@@ -835,10 +835,18 @@ deploy_embodied_dreamfinder() {
         # defaults here ARE the deployed contract. lyra-live mode (and its
         # LYRA_SSH_* fields) was removed with the rename; it returns behind the
         # engine's brain selector in Stage C of the engine-extraction plan.
-        printf 'BRAIN=%s\n'                "$(dotenv_quote "$(edf_field '.brain' 'oauth')")"
+        printf 'BRAIN=%s\n'                "$(dotenv_quote "$(edf_field '.brain' 'http')")"
+        printf 'BRAIN_URL=%s\n'            "$(dotenv_quote "$(edf_field '.brain_url' 'http://host.docker.internal:3020')")"
+        printf 'BRAIN_SERVICE_KEY=%s\n'    "$(dotenv_quote "$(edf_field '.brain_service_key')")"
         printf 'BRAIN_MODEL=%s\n'          "$(dotenv_quote "$(edf_field '.brain_model' 'claude-opus-4-8')")"
-        printf 'STT=%s\n'                  "$(dotenv_quote "$(edf_field '.stt' 'faster-whisper')")"
-        printf 'TTS=%s\n'                  "$(dotenv_quote "$(edf_field '.tts' 'kokoro')")"
+        printf 'STT=%s\n'                  "$(dotenv_quote "$(edf_field '.stt' 'deepgram')")"
+        # DEEPGRAM: STT + Aura TTS (2026-07-16 demo stack). deepgram_api_key and
+        # brain_service_key MUST be added to secrets.yaml before the next infra
+        # deploy of embodied-dreamfinder — empty values crash the container at
+        # boot (fail-closed selectors), loudly not silently.
+        printf 'DEEPGRAM_API_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.deepgram_api_key')")"
+        printf 'TTS_VOICE=%s\n'            "$(dotenv_quote "$(edf_field '.tts_voice' 'aura-2-orpheus-en')")"
+        printf 'TTS=%s\n'                  "$(dotenv_quote "$(edf_field '.tts' 'deepgram')")"
         # ascend night-loop ingest bearer (POST /api/ascend/night). Same secret as ascend's ASCEND_DF_KEY.
         printf 'ASCEND_INGEST_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.ascend_ingest_key')")"
         # Second password scoping a session to "ascend" (unlocks the DF that knows last night).
