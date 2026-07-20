@@ -479,7 +479,17 @@ deploy_backups() {
     # Set up backup cron job and log directory
     echo "Setting up backup cron job..."
     ssh "$REMOTE" "mkdir -p ~/logs"
-    ssh "$REMOTE" "echo '0 4 * * * nick /opt/scripts/backup.sh all >> /home/nick/logs/backup.log 2>&1' | sudo tee /etc/cron.d/backup > /dev/null"
+    # Staggered to 04:30, NOT 04:00, to avoid racing the xdeca-infra deploy's
+    # `/etc/cron.d/xdeca-backup` (xdeca-infra scripts/deploy-to.sh), which also
+    # fires `backup.sh all` at `0 4 * * *`. Both backups push to the SAME GitHub
+    # backup clone at /tmp/imagineering-backups (and run the SAME on-host
+    # /opt/scripts/backup.sh), so a same-minute start makes them collide on that
+    # shared working tree — concurrent `git add`/`commit`/`push` corrupt or lose
+    # each other's commit. A 30-minute offset lets one finish before the other
+    # starts. NOTE: this only un-races THIS repo's cron; the deeper coupling
+    # (both repos overwrite /opt/scripts/backup.sh and contend on one clone) is a
+    # cross-repo concern that xdeca-infra must also acknowledge — see PR body.
+    ssh "$REMOTE" "echo '30 4 * * * nick /opt/scripts/backup.sh all >> /home/nick/logs/backup.log 2>&1' | sudo tee /etc/cron.d/backup > /dev/null"
 
     # --- GitHub backup setup ---
     echo ""
