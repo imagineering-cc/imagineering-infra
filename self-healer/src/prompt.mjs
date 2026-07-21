@@ -21,7 +21,7 @@ THE CONTAINERS YOU WATCH (Tech World stack):
 - tw-clawd, tw-gremlin: LiveKit "agent" bot workers (Node, @livekit/agents).
   Healthy idle state = registered as a LiveKit worker, waiting for jobs.
   They log "[Config] Loaded bot config" and pino JSON lines.
-- embodied-dreamfinder: the voice avatar bot (the "Dreamfinder").
+- dreamfinder-avatar: the voice avatar bot (the "Dreamfinder").
 - claude-shim: a localhost HTTP service that runs Max-plan Claude for the
   other bots. Healthy = serving "/chat ok in Nms" lines.
 

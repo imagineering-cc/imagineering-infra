@@ -13,9 +13,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.lyra.yml up -d
 #
 # Host-key pinning (cage-match #81, finding 2 — the cross-repo other half):
-# the lyra-live ssh hop in embodied-dreamfinder used StrictHostKeyChecking=no +
+# the lyra-live ssh hop in dreamfinder-avatar used StrictHostKeyChecking=no +
 # UserKnownHostsFile=/dev/null, accepting ANY server identity (MITM). The JS
-# fix is prepared in embodied-dreamfinder PR #65 (still OPEN, based on
+# fix is prepared in dreamfinder-avatar PR #65 (still OPEN, based on
 # feat/lyra-speak — the lyra-live brain isn't in that repo's main yet): the hop
 # switches to StrictHostKeyChecking=yes and reads its known_hosts from
 # LYRA_KNOWN_HOSTS (default /app/.ssh/known_hosts). This mount provides the file
@@ -23,7 +23,7 @@
 #
 # ACTIVATION GATE — all three must be true before flipping DF_BRAIN=lyra-live in
 # production, or the hop fails closed:
-#   1. embodied-dreamfinder PR #65 merged into the deployed app branch (so the
+#   1. dreamfinder-avatar PR #65 merged into the deployed app branch (so the
 #      StrictHostKeyChecking=yes consuming code is actually built).
 #   2. The pinned host key generated ONCE on the deploy host:
 #          ssh-keyscan 207.211.145.30 > /home/nick/.ssh/lyra-known_hosts

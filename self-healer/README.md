@@ -284,6 +284,6 @@ fail fast on misconfiguration.
 - Observed live: `tw-gremlin` logged `level:50 "worker connection closed
   unexpectedly"` then re-registered under a new LiveKit node ~66ms later — a
   self-healed node rotation, the canonical "error that isn't a problem".
-- `embodied-dreamfinder` was logging `OpenAI Realtime mode ready`, i.e. the
+- `dreamfinder-avatar` was logging `OpenAI Realtime mode ready`, i.e. the
   *deployed* DF is on OpenAI Realtime, not the Max-plan `claude-shim` brain —
   worth reconciling against the intended architecture.

@@ -3,7 +3,7 @@
   "targets": [
     { "name": "tw-clawd" },
     { "name": "tw-gremlin" },
-    { "name": "embodied-dreamfinder" },
+    { "name": "dreamfinder-avatar" },
     { "name": "claude-shim" }
   ]
 }

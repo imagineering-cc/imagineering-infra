@@ -5,7 +5,7 @@
 // Programmatic Claude calls on OCI should run on Nick's Max subscription
 // (zero marginal cost) via headless Claude Code, NOT the metered Anthropic
 // API. But two would-be callers live in Docker containers:
-//   - embodied-dreamfinder's voice brain (was 400-erroring on zero API credit)
+//   - dreamfinder-avatar's voice brain (was 400-erroring on zero API credit)
 //   - the in-prod log-reading self-healer (diagnosis stage)
 // Both need the same thing: "run Claude on the Max plan from this box."
 // This service is that one shared artifact. It exposes a minimal

@@ -14,10 +14,10 @@ import {
 } from '../cage/agent-entrypoint.mjs';
 
 const fullEnv = () => ({
-  CAGE_AGENT_REPO: 'imagineering-cc/embodied-dreamfinder',
+  CAGE_AGENT_REPO: 'imagineering-cc/dreamfinder-avatar',
   CAGE_AGENT_FP: 'abc123def456789',
   CAGE_AGENT_DIAGNOSIS: 'null deref when transcript is empty',
-  CAGE_AGENT_CONTAINER: 'embodied-dreamfinder',
+  CAGE_AGENT_CONTAINER: 'dreamfinder-avatar',
   CAGE_AGENT_SIGNATURE: 'TypeError: cannot read length of undefined',
   CAGE_AGENT_PROPOSED_ACTION: 'guard the empty-transcript case',
   GITHUB_TOKEN: 'ghs-repo-scoped',

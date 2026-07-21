@@ -10,7 +10,7 @@ metered Anthropic API.
 Two callers on the OCI box need Claude inference but were paying per-token (or
 failing on a zero API balance):
 
-- **embodied-dreamfinder's voice brain** — was 400-erroring when the Anthropic
+- **dreamfinder-avatar's voice brain** — was 400-erroring when the Anthropic
   credit balance hit zero.
 - **the in-prod log-reading self-healer** (diagnosis stage) — wants Claude to
   read a log window and propose a fix.
@@ -29,7 +29,7 @@ claude setup-token      # interactive OAuth; prints a long-lived token
 ```
 
 The token is stored as a **SOPS-encrypted secret** in this repo, the same
-convention every other service here uses (`notify/`, `embodied-dreamfinder/`,
+convention every other service here uses (`notify/`, `dreamfinder-avatar/`,
 …). The plaintext token is never committed — only the age-encrypted ciphertext
 lives in git.
 
@@ -90,5 +90,5 @@ From another container on the `imagineering` network, the URL is
 
 ## Consumers
 
-- `embodied-dreamfinder` — set `DF_BRAIN=maxplan` and `CLAUDE_SHIM_URL=http://claude-shim:8088`.
+- `dreamfinder-avatar` — set `DF_BRAIN=maxplan` and `CLAUDE_SHIM_URL=http://claude-shim:8088`.
 - the healer (future) — same endpoint, a stronger `model` per request for diagnosis.

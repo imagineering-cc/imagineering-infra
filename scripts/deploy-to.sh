@@ -195,7 +195,7 @@ deploy_galaxy() {
     #
     # Source now lives in its OWN repo (imagineering-cc/galaxy), cloned at
     # ~/git/orgs/imagineering/galaxy — same EDF_SRC-style convention as
-    # embodied-dreamfinder. Split out of this repo 2026-06-21.
+    # dreamfinder-avatar. Split out of this repo 2026-06-21.
     #
     # Destination is ~/apps/galaxy — the Caddy container bind-mounts
     # /home/nick/apps/galaxy -> /srv/galaxy:ro (see caddy/docker-compose.yml).
@@ -787,19 +787,19 @@ deploy_pm_bot() {
 deploy_embodied_dreamfinder() {
     echo "Deploying Embodied Dreamfinder (voice avatar)..."
 
-    local EDF_SECRETS="$REPO_ROOT/embodied-dreamfinder/secrets.yaml"
-    local EDF_SRC="$HOME/git/orgs/imagineering/embodied-dreamfinder"
+    local EDF_SECRETS="$REPO_ROOT/dreamfinder-avatar/secrets.yaml"
+    local EDF_SRC="$HOME/git/orgs/imagineering/dreamfinder-avatar"
 
     # Check for secrets file
     if [ ! -f "$EDF_SECRETS" ]; then
-        echo "ERROR: embodied-dreamfinder/secrets.yaml not found"
-        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i embodied-dreamfinder/secrets.yaml"
+        echo "ERROR: dreamfinder-avatar/secrets.yaml not found"
+        echo "Create it from secrets.yaml.example and encrypt with: sops -e -i dreamfinder-avatar/secrets.yaml"
         return 1
     fi
 
     # Check for source code
     if [ ! -d "$EDF_SRC" ]; then
-        echo "ERROR: embodied-dreamfinder source not found at $EDF_SRC"
+        echo "ERROR: dreamfinder-avatar source not found at $EDF_SRC"
         return 1
     fi
 
@@ -842,7 +842,7 @@ deploy_embodied_dreamfinder() {
         printf 'STT=%s\n'                  "$(dotenv_quote "$(edf_field '.stt' 'deepgram')")"
         # DEEPGRAM: STT + Aura TTS (2026-07-16 demo stack). deepgram_api_key and
         # brain_service_key MUST be added to secrets.yaml before the next infra
-        # deploy of embodied-dreamfinder — empty values crash the container at
+        # deploy of dreamfinder-avatar — empty values crash the container at
         # boot (fail-closed selectors), loudly not silently.
         printf 'DEEPGRAM_API_KEY=%s\n'     "$(dotenv_quote "$(edf_field '.deepgram_api_key')")"
         printf 'TTS_VOICE=%s\n'            "$(dotenv_quote "$(edf_field '.tts_voice' 'aura-2-orpheus-en')")"
@@ -855,9 +855,9 @@ deploy_embodied_dreamfinder() {
         # (not the public-embeddable renderer): lets it request ascend-scoped context over
         # 127.0.0.1 so the local LiveKit pipeline gets the night. Server + agent run in the
         # same container, so this one value reaches both. <16 chars → server disables the
-        # override (fail-closed). See embodied-dreamfinder server.js localhost branch.
+        # override (fail-closed). See dreamfinder-avatar server.js localhost branch.
         printf 'INTERNAL_SCOPE_KEY=%s\n'    "$(dotenv_quote "$(edf_field '.internal_scope_key')")"
-    } > "$REPO_ROOT/embodied-dreamfinder/.env"
+    } > "$REPO_ROOT/dreamfinder-avatar/.env"
 
     # Base compose only. lyra-live (and its docker-compose.lyra.yml key mount)
     # is not selectable since the BRAIN rename — the current pipeline accepts
@@ -867,26 +867,26 @@ deploy_embodied_dreamfinder() {
     EDF_COMPOSE_ARGS="-f docker-compose.yml"
 
     # Deploy files
-    ssh "$REMOTE" "mkdir -p ~/apps/embodied-dreamfinder/src"
+    ssh "$REMOTE" "mkdir -p ~/apps/dreamfinder-avatar/src"
 
     # Copy docker compose and .env
-    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/embodied-dreamfinder/" "$REMOTE":~/apps/embodied-dreamfinder/
+    rsync -avz --exclude 'secrets.yaml' "$REPO_ROOT/dreamfinder-avatar/" "$REMOTE":~/apps/dreamfinder-avatar/
 
     # Copy source code (Node.js project + avatar GLB)
-    rsync -avz --delete --exclude 'node_modules' --exclude '.env' --exclude '.git' "$EDF_SRC/" "$REMOTE":~/apps/embodied-dreamfinder/src/
+    rsync -avz --delete --exclude 'node_modules' --exclude '.env' --exclude '.git' "$EDF_SRC/" "$REMOTE":~/apps/dreamfinder-avatar/src/
 
     # Clean up local .env
-    rm -f "$REPO_ROOT/embodied-dreamfinder/.env"
+    rm -f "$REPO_ROOT/dreamfinder-avatar/.env"
 
     # Ensure shared network exists (allows voice brain to reach text brain)
     ssh "$REMOTE" "docker network inspect imagineering >/dev/null 2>&1 || docker network create imagineering"
 
     # Build and start (override applied only in lyra-live mode — see above)
-    ssh "$REMOTE" "cd ~/apps/embodied-dreamfinder && DOCKER_BUILDKIT=1 docker compose $EDF_COMPOSE_ARGS build --pull && docker compose $EDF_COMPOSE_ARGS up -d"
+    ssh "$REMOTE" "cd ~/apps/dreamfinder-avatar && DOCKER_BUILDKIT=1 docker compose $EDF_COMPOSE_ARGS build --pull && docker compose $EDF_COMPOSE_ARGS up -d"
 
     echo "Embodied Dreamfinder deployed!"
     echo "  URL: https://df.imagineering.cc"
-    echo "  Check logs: ssh $REMOTE 'docker logs -f embodied-dreamfinder'"
+    echo "  Check logs: ssh $REMOTE 'docker logs -f dreamfinder-avatar'"
 }
 
 deploy_livekit() {
@@ -1451,7 +1451,7 @@ case $SERVICE in
     youtube-rag|rag)
         deploy_youtube_rag
         ;;
-    embodied-dreamfinder|edf|avatar)
+    dreamfinder-avatar|edf|avatar)
         deploy_embodied_dreamfinder
         ;;
     livekit)
@@ -1471,7 +1471,7 @@ case $SERVICE in
         ;;
     *)
         echo "Unknown service: $SERVICE"
-        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|embodied-dreamfinder|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite|galaxy]"
+        echo "Usage: $0 <ip> [all|caddy|outline|kanbn|radicale|dreamfinder|dreamfinder-avatar|livekit|matrix|claudius|lugh|youtube-rag|imagineering-contact-us|backups|scripts|site|invite|galaxy]"
         exit 1
         ;;
 esac

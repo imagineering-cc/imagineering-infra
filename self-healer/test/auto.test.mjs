@@ -44,7 +44,7 @@ function withEnv(overrides, fn) {
 }
 
 const greenFinding = (over = {}) => ({
-  container: 'embodied-dreamfinder', // mapped in repos.mjs
+  container: 'dreamfinder-avatar', // mapped in repos.mjs
   tier: 'green',
   confidence: 'high',
   signature: 'null deref on empty transcript',
@@ -175,7 +175,7 @@ test('formatAutoOutcome: FAILED → a stumble ping; benign outcomes are quiet (n
 test('buildRunCageSpawn: routes through run-cage.mjs and carries the BOUNDED token only', () => {
   const substrate = { image: 'agent:1', network: 'cage-internal', proxyUrl: 'http://proxy:3128', agentCmd: 'claude -p --headless', claudeToken: 'sk-ant-oat-xyz' };
   const spec = buildRunCageSpawn({
-    finding: greenFinding(), repo: 'imagineering-cc/embodied-dreamfinder',
+    finding: greenFinding(), repo: 'imagineering-cc/dreamfinder-avatar',
     workdirHost: '/tmp/healer-green-auto.AAA', token: 'repo-scoped-xyz', substrate,
   });
 
@@ -193,7 +193,7 @@ test('buildRunCageSpawn: routes through run-cage.mjs and carries the BOUNDED tok
   assert.equal(spec.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
   assert.equal(spec.env.CAGE_WORKDIR, '/tmp/healer-green-auto.AAA');
   assert.equal(spec.env.CAGE_IMAGE, 'agent:1');
-  assert.equal(spec.env.CAGE_AGENT_REPO, 'imagineering-cc/embodied-dreamfinder');
+  assert.equal(spec.env.CAGE_AGENT_REPO, 'imagineering-cc/dreamfinder-avatar');
 
   // deterministic, fingerprint-derived container name
   assert.match(spec.name, /^healer-green-auto-[0-9a-f]{12}$/);

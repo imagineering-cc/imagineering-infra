@@ -18,7 +18,7 @@ import { repoForContainer } from '../src/repos.mjs';
 
 test('repoForContainer: maps known containers, null for unknown', () => {
   assert.equal(repoForContainer('tw-clawd'), 'enspyrco/tech_world_bot');
-  assert.equal(repoForContainer('embodied-dreamfinder'), 'imagineering-cc/embodied-dreamfinder');
+  assert.equal(repoForContainer('dreamfinder-avatar'), 'imagineering-cc/dreamfinder-avatar');
   assert.equal(repoForContainer('claude-shim'), null); // source not versioned anywhere
   assert.equal(repoForContainer('nope'), null);
 });
@@ -367,7 +367,7 @@ test('collapseRepeats: timestamped singleton keeps its timestamp; distinct messa
 
 test('assertValidContainerName: accepts docker-legal names, rejects shell metachars', () => {
   assert.equal(assertValidContainerName('tw-clawd'), 'tw-clawd');
-  assert.equal(assertValidContainerName('embodied-dreamfinder'), 'embodied-dreamfinder');
+  assert.equal(assertValidContainerName('dreamfinder-avatar'), 'dreamfinder-avatar');
   assert.throws(() => assertValidContainerName('a; rm -rf /'));
   assert.throws(() => assertValidContainerName('$(whoami)'));
   assert.throws(() => assertValidContainerName('has space'));

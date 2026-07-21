@@ -87,7 +87,7 @@ df.imagineering.cc {
     reverse_proxy localhost:3015
 }
 
-# Lyra's live Q&A — same embodied-dreamfinder app; the app detects the "lyra."
+# Lyra's live Q&A — same dreamfinder-avatar app; the app detects the "lyra."
 # host and serves her persona, voice, and own face (no ?lyra param needed).
 lyra.imagineering.cc {
     reverse_proxy localhost:3015
@@ -173,7 +173,7 @@ api.downstream-storage.cc {
 # --- Tech World (Flutter web + avatar via DF) ---
 
 world.imagineering.cc {
-    # Avatar renderer and its assets — proxy to embodied-dreamfinder (port 3015).
+    # Avatar renderer and its assets — proxy to dreamfinder-avatar (port 3015).
     # These paths match RENDERER_PATHS and RENDERER_PREFIXES in server.js.
     @df_renderer {
         path /avatar /avatar-renderer.js /sparks.js /avatars/* /headaudio/*

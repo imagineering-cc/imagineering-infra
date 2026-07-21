@@ -56,7 +56,7 @@ Sydney (149.118.69.221) hosts both **imagineering** services (img-* containers, 
 | matrix-continuwuity | 8008 | matrix.imagineering.cc | Matrix homeserver (Conduit fork) |
 | (matrix bridges) | - | - | mautrix-signal/whatsapp/telegram/discord, plus relay-bot + relay-bot-hf |
 | Dreamfinder (pm-bot) | 8081 | dreamfinder.imagineering.cc | Matrix-based AI project management bot |
-| embodied-dreamfinder | 3015 | df.imagineering.cc | 3D avatar voice frontend |
+| dreamfinder-avatar | 3015 | df.imagineering.cc | 3D avatar voice frontend |
 | symposium | 3016 | symposium.imagineering.cc | Discussion/event space |
 | livekit | - | livekit.imagineering.cc | WebRTC SFU (TURN/TLS at :5349 currently disabled — see memory) |
 | youtube-rag | 3010/8010 | rag.imagineering.cc, rag-api.imagineering.cc | YouTube transcript RAG (frontend + backend + chroma) |

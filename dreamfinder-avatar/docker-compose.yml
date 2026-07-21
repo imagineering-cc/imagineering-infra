@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: ./src
-    container_name: embodied-dreamfinder
+    container_name: dreamfinder-avatar
     restart: unless-stopped
     ports:
       - "3015:3000"
@@ -67,7 +67,7 @@ services:
       # container env, so one value serves both. <16 chars → override disabled (fail-closed).
       - INTERNAL_SCOPE_KEY=${INTERNAL_SCOPE_KEY:-}
     volumes:
-      - embodied-dreamfinder-data:/data
+      - dreamfinder-avatar-data:/data
       - /home/nick/whisper.cpp/build/bin:/opt/whisper/bin:ro
       - /home/nick/whisper.cpp/build/src:/opt/whisper/lib:ro
       - /home/nick/whisper.cpp/build/ggml/src:/opt/whisper/ggml-lib:ro
@@ -86,4 +86,4 @@ networks:
 
 # Persists the ascend night across container recreation (redeploys rebuild the container).
 volumes:
-  embodied-dreamfinder-data:
+  dreamfinder-avatar-data:

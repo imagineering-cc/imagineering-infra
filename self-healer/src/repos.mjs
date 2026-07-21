@@ -16,7 +16,7 @@
 export const CONTAINER_REPOS = Object.freeze({
   'tw-clawd': 'enspyrco/tech_world_bot',
   'tw-gremlin': 'enspyrco/tech_world_bot',
-  'embodied-dreamfinder': 'imagineering-cc/embodied-dreamfinder',
+  'dreamfinder-avatar': 'imagineering-cc/dreamfinder-avatar',
 });
 
 /** @returns {string|null} "owner/repo" or null if the container has no known source repo. */
