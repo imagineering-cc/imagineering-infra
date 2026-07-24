@@ -10,7 +10,7 @@ The catch? Everyone wants one, so they're almost always "out of capacity." Hence
 ┌─────────────────────────────────────────┐
 │  Oracle Cloud Always Free ARM Instance  │
 │                                         │
-│  • 4 OCPU (ARM cores) / 24GB RAM       │
+│  • 2 OCPU (ARM cores) / 12GB RAM        │
 │  • Up to 200GB disk                     │
 │  • Ubuntu 24.04                         │
 │  • Public IP address                    │
@@ -129,6 +129,8 @@ Then verify it works:
 oci --version
 ```
 
+> **Official install docs:** [Installing the CLI](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm) — covers the quickstart installer above plus alternatives (MacOS Homebrew: `brew install oci-cli`, Windows) and prerequisites.
+
 ---
 
 ## Step 3: Set Up OCI Authentication
@@ -225,7 +227,7 @@ This creates a key pair. The script will pass the public key to Oracle when crea
 
 ## Step 6: Install Dependencies
 
-On your always-on machine:
+On your local machine:
 
 ```bash
 # jq for parsing JSON responses from OCI
